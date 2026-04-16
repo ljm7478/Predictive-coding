@@ -1,0 +1,16 @@
+%% make feaure2D
+dataroot = '/combinelab/03_user/jungmin/01_project/02_PredNet/jmPNET/data/05_AlexNet/result/h5/';
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/AlexNet_test/bivariate_analysis/E/';
+for seg = 1 : 18
+    secpath = [dataroot,'seg', num2str(seg), '_E', '.h5']
+    for lay = 1 : length(layername)
+        disp(['Seg: ', num2str(seg), '; Layer: ',layername{lay}]);
+        % info = h5info(secpath);
+        lay_feat = h5read(secpath,[layername{lay}]);
+        dim = size(lay_feat);
+        Nu = prod(dim(1:end-1)); % number of units
+        Nf = dim(end); % number of frames
+        lay_feat = reshape(lay_feat,Nu,Nf);% Nu*Nf
+    end
+    save 
+end

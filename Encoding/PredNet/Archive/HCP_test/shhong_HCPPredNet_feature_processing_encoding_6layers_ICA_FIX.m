@@ -1,0 +1,483 @@
+%% Step5.2: make W
+clc; clear
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_ICA_FIX_test';
+
+addpath(genpath('/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/code'));
+
+features = {'Ahat','E'};
+
+
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx};
+    disp(feature); 
+    for layer = 0:5
+        for seg = 1:4
+            filename = sprintf('/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test/X/PCA/6layers/%s%d_feature_maps_svd_0.90_hrf_seg%d.mat', feature, layer, seg);
+            loaded_data = load(filename);
+            name = sprintf('%s%d_seg%d', feature, layer, seg)
+            concatenated.(name) = loaded_data.segments;
+            eval([name, '= concatenated.(name);']);
+%             X_total{end+1, 1} = name;  % Store the name
+%             X_total{end, 2} = loaded_data.segments;  % Store the segments
+        end
+    end
+
+end
+ 
+%Voxelwise_encoding
+lambda = [0.1:0.2:0.9];
+nfold = 9; %from paper 
+
+%load Y
+load([saveroot, '/' , 'Y', '/', 'fMRI_ICA_fix_10k_cortex.mat']);
+sub_cii = reshape(sub_cii, 15, 1);
+
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 724446, 818859, 901139, 102311];
+features = {'Ahat' , 'E'};
+
+
+for i = 1:15
+    subject = subjectIDs(i);
+    disp(['Voxelwise_encoding start sub ', num2str(subject)])
+    
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature)
+
+        for seg = 1:4
+            disp(['Segment: ', num2str(seg)]);
+           for layer = 0:5
+                disp(['Layer: ', num2str(layer)]);
+                
+                % Y calculate 
+                switch seg
+                    case 1
+                        disp(['seg is ', num2str(seg)])
+                        Y = cat(2, sub_cii{i}{2}, sub_cii{i}{3}, sub_cii{i}{4});
+                    case 2
+                        disp(['seg is ', num2str(seg)])
+                        Y = cat(2, sub_cii{i}{1}, sub_cii{i}{3}, sub_cii{i}{4});
+                    case 3
+                        disp(['seg is ', num2str(seg)])
+                        Y = cat(2, sub_cii{i}{1}, sub_cii{i}{2}, sub_cii{i}{4});
+                    case 4
+                        disp(['seg is ', num2str(seg)])
+                        Y = cat(2, sub_cii{i}{1}, sub_cii{i}{2}, sub_cii{i}{3});
+                end
+                
+                % X calculate (concat training set) 
+                X_tot = {};
+                for s = 1:4
+                    if s ~= seg
+                        disp([sprintf('current sement is %s and s is %s', num2str(seg), num2str(s))])
+                        disp([sprintf('%s%d_seg%d', feature, layer, s)])
+                        X_tot{end+1} = concatenated.(sprintf('%s%d_seg%d', feature, layer, s));
+                    end
+                end
+                X = cat(1, X_tot{:});
+                
+                %voxelwise encoding
+                [W, Rmat, Lambda] = voxelwise_encoding(X, Y', lambda, nfold);
+                
+                % save W (feature x voxel)
+                folder_name = [saveroot,'/', 'W','/','PCA','/',sprintf('seg%d',seg)]
+                
+                name = [num2str(subject), '_', feature, num2str(layer), '_W_svd0.9.mat']
+                save([folder_name,'/', name], 'W', '-v7.3');
+            end
+        end
+    end
+end
+
+%% Step6.1: Yhat 
+
+% X model featuremaps 
+clc; clear
+disp('Load model featuremaps')
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_ICA_FIX_test';
+
+features = {'Ahat','E'};
+
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx};
+    disp(feature); 
+    for layer = 0:5
+        for seg = 1:4
+            filename = sprintf('/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test/X/PCA/6layers/%s%d_feature_maps_svd_0.90_hrf_seg%d.mat', feature, layer, seg);
+            loaded_data = load(filename);
+            name = sprintf('%s%d_seg%d', feature, layer, seg)
+            concatenated.(name) = loaded_data.segments;
+            eval([name, '= concatenated.(name);']);
+        end
+    end
+
+end
+disp('make Y_hat')
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 724446, 818859, 901139, 102311];
+
+for i = 1:15
+    subject = subjectIDs(i)
+    disp(['Voxelwise_encoding start sub ', num2str(subject)])    
+    
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx}
+        disp(feature);
+        
+        for seg=1:4
+            folder_name = [saveroot,'/', 'Y_hat','/','PCA', '/', sprintf('seg%d',seg)]
+            if not(exist(folder_name,'dir'))
+                mkdir(folder_name)
+            end
+            for layer=0:5
+
+                % X calculate
+                X = {};
+                for s = 1:4
+                    if s == seg
+                        disp(['s is ', num2str(s)])
+                        disp([sprintf('%s%d_seg%d', feature, layer, s)])
+                        X = concatenated.(sprintf('%s%d_seg%d', feature, layer, s));
+                    end
+                end
+
+                W = load([saveroot,'/', 'W', '/', 'PCA',  '/', sprintf('seg%d',seg), '/',num2str(subject), '_', feature, num2str(layer), '_W_svd0.9.mat']);
+                name = ['Y_pred_sub',num2str(subject),'_',feature, num2str(layer)] 
+                eval([name, '= X * W.W;']);
+                
+                %save Y_hat
+                Yhat = eval(name);
+                name2 = strcat(num2str(subject),'_', feature , num2str(layer), '_pred_svd0.90.mat');
+               
+                save([saveroot,'/', 'Y_hat','/', 'PCA', '/', sprintf('seg%d',seg),  '/',  name2], 'Yhat', '-v7.3');
+            end
+        end
+    end
+end
+
+%% step6.2: correaltion between Y_predict and actual Y for test - single segment
+clc; clear
+disp('correaltion and p_values compute start')
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_ICA_FIX_test';
+
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 724446, 818859, 901139, 102311];
+features = {'Ahat', 'E'};
+
+load([saveroot, '/' , 'Y', '/', 'fMRI_ICA_fix_10k_cortex.mat']);
+
+
+for i = 1:15
+    subject = subjectIDs(i)
+    
+    disp(['correalting' , subject])
+    
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx}
+        disp(feature)
+        
+        for layer= 0:5
+            for seg = 1:4
+                saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_ICA_FIX_test';
+                
+                folder_name = [saveroot,'/', 'correlations','/', 'PCA', '/', sprintf('seg%d',seg)]
+                
+                Y_pred = load([saveroot,'/', 'Y_hat','/','PCA', '/',  sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer),'_pred_svd0.90', '.mat')]);
+                Y_pred = Y_pred.Yhat;
+                
+                disp(['seg is ' , num2str(seg)])
+                
+                if seg == 1
+                    Y = sub_cii{i}{1};
+                elseif seg == 2
+                    Y = sub_cii{i}{2};
+                elseif seg == 3
+                    Y = sub_cii{i}{3};
+                else seg == 4
+                    Y = sub_cii{i}{4};
+                end
+                
+                [correlations, p_values] = auto_corr(Y',Y_pred);
+                
+                correlations = correlations';
+                
+                % save correlation (feature x voxel)
+                disp('save correlations')
+                
+                name = strcat(num2str(subject),'_', feature , num2str(layer), '_corr_svd0.90.mat')
+                save([saveroot,'/', 'correlations','/', 'PCA', '/', sprintf('seg%d',seg), '/', name], 'correlations', '-v7.3');
+
+            end
+        end
+    end
+end
+
+%% Step 6.1: concat Yhat for all segments + correalting with total movie fMRI
+clc; clear
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_ICA_FIX_test';
+
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 724446, 818859, 901139, 102311];
+features = {'Ahat', 'E'};
+
+load([saveroot, '/' , 'Y', '/', 'fMRI_ICA_fix_10k_cortex.mat']);
+
+folder_name = [saveroot,'/', 'correlations','/', 'PCA', '/', 'total']
+if not(exist(folder_name,'dir'))
+    mkdir(folder_name)
+end
+
+for i = 1:15
+    subject = subjectIDs(i)
+    disp(i)
+    disp(['Voxelwise_encoding start sub ', num2str(subject)])    
+    
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx}
+        disp(feature);
+        for layer=0:5
+            for seg = 1:4
+                
+                saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_ICA_FIX_test';
+
+                Y_hat = load([saveroot,'/', 'Y_hat','/','PCA', '/', sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer), '_pred_svd0.90.mat')]);
+                disp([saveroot,'/', 'Y_hat','/','PCA', '/', sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer), '_pred_svd0.90.mat')])
+                
+                %zscore
+                X{seg} = zscore(Y_hat.Yhat);
+
+            end
+            Y_pred = sprintf('%s%d_seg1_4', feature, layer)
+            
+            %concatenated zscored Y_hat for seg1-4
+            concatenated.(Y_pred)= cat(1, X{:});
+    
+            %correaltions
+            %load Y 
+            sub_cii1_4 = cat(2, sub_cii{i}{1}, sub_cii{i}{2}, sub_cii{i}{3}, sub_cii{i}{4});
+            [correlations, p_values] = auto_corr(sub_cii1_4',concatenated.(Y_pred));
+
+            correlations = correlations';
+
+            % save correlation (feature x voxel)
+            disp('save correlations')
+           
+            name = strcat(num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90', '.mat')
+            save([saveroot,'/', 'correlations','/', 'PCA', '/', 'total', '/', name], 'correlations', '-v7.3');
+        end
+    end
+end
+
+
+%% Step7: make dtseries - total
+clc;clear
+addpath(genpath('/local_raid1/01_software/toolboxes/cifti-matlab'));
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_ICA_FIX_test';
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 724446, 818859, 901139, 102311];
+features = {'Ahat', 'E'};
+
+folder_name = [saveroot,'/', 'dt_result','/', 'total']
+if not(exist(folder_name,'dir'))
+    mkdir(folder_name)
+end
+X={} ;
+for i = 1:15
+    subject = subjectIDs(i)
+
+
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx}
+        disp(feature);
+        for layer=0:5
+            % Load cifti -10k
+            folder_path = '/combinelab/02_data/01_HCP/7T_MOVIE_2mm/100610/MNINonLinear/Results/tfMRI_MOVIE1_7T_AP/';
+            files = dir(fullfile(folder_path, 'tfMRI_MOVIE1_7T_AP_Atlas_MSMAll.10k.dtseries.nii'));
+    
+            file_path = fullfile(folder_path, files.name);
+            cii = ciftiopen(file_path, 'wb_command');
+            cii = rmfield(cii, 'cdata');
+    
+            %load correaltion
+            load([saveroot,'/', 'correlations','/','PCA', '/', 'total', '/', num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90.mat']);
+            disp([saveroot,'/', 'correlations','/','PCA', '/', 'total', '/', num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90.mat']);
+            
+            % Update cdata and diminfo
+            cii.cdata = correlations;
+            cii.diminfo{1, 1}.length = size(correlations, 1);
+            cii.diminfo{1, 2}.length = size(correlations, 2);
+            cii.diminfo{1, 1}.models(3:end) = []; % subcortex removal
+            
+            % Concatenate cdata for each layer
+            if isempty(X)
+                X = cii;
+            else
+                X.cdata = cat(2, X.cdata, cii.cdata);
+            end
+        end
+        
+        % Save as dtseries
+        save_file_name = ([num2str(subject),'_', feature, '.dtseries.nii']);
+        ciftisavereset(X, fullfile(saveroot, 'dt_result', '/', 'total', '/', save_file_name), 'wb_command');
+
+        X={} ;
+    end
+end
+
+%% Step7: make dtseries - single sub
+clc;clear
+addpath(genpath('/local_raid1/01_software/toolboxes/cifti-matlab'));
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_ICA_FIX_test';
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 724446, 818859, 901139, 102311];
+features = {'Ahat','E'};
+X={};
+for i = 1:15
+    subject = subjectIDs(i)
+    
+    for seg = 1:4
+        folder_name = [saveroot,'/', 'dt_result','/',  sprintf('seg%d',seg)]
+        if not(exist(folder_name,'dir'))
+            mkdir(folder_name)
+        end
+        for feature_idx = 1:numel(features)
+            feature = features{feature_idx}
+            disp(feature);
+            
+            for layer= 0:5
+                
+                % Load cifti -10k
+                folder_path = '/combinelab/02_data/01_HCP/7T_MOVIE_2mm/100610/MNINonLinear/Results/tfMRI_MOVIE1_7T_AP/';
+                files = dir(fullfile(folder_path, 'tfMRI_MOVIE1_7T_AP_Atlas_MSMAll.10k.dtseries.nii'));
+                
+                file_path = fullfile(folder_path, files.name);
+                cii = ciftiopen(file_path, 'wb_command');
+                cii = rmfield(cii, 'cdata');
+                
+                %load correaltion
+                load([saveroot,'/', 'correlations','/', 'PCA', '/', sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90.mat')]);
+                disp([sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90.mat')]);
+                
+                % Update cdata and diminfo
+                cii.cdata = correlations;
+                cii.diminfo{1, 1}.length = size(correlations, 1);
+                cii.diminfo{1, 2}.length = size(correlations, 2);
+                cii.diminfo{1, 1}.models(3:end) = []; % subcortex removal
+                
+                % Concatenate cdata for each layer
+                if isempty(X)
+                    X = cii;
+                else
+                    X.cdata = cat(2, X.cdata, cii.cdata);
+                end
+            end
+            % Save as dtseries
+            save_file_name = ([num2str(subject),'_', feature, '.dtseries.nii']);
+            ciftisavereset(X, fullfile(saveroot, 'dt_result', '/',  sprintf('seg%d',seg), '/',save_file_name), 'wb_command');
+            
+            %initialize
+            X={};
+        end
+    end
+end
+
+%% avg .mat
+clc;clear
+
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_ICA_FIX_test';
+
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 724446, 818859, 901139, 102311];
+num_layer = 3;
+features = {'Ahat', 'E'}
+
+Y_hat = {};
+
+
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx}
+    disp(feature)
+    for seg = 1:4
+%         folder_name = [saveroot,'/', 'dt_result','/', 'PCA', '/', sprintf('seg%d',seg),'/']
+%         if not(exist(folder_name,'dir'))
+%             mkdir(folder_name)
+%         end 
+        for layer= 0:5
+            sum_values = 0;
+            for i = 1:15
+                subject = subjectIDs(i)
+
+                % Load correlation
+                load([saveroot,'/', 'correlations','/', 'PCA', '/', 'total', '/', strcat(num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90.mat')]);
+                disp([sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90.mat')]);
+         
+                sum_values = sum_values + correlations';
+            end
+        Y_hat{layer+1} = sum_values / 15;
+        end
+        save([saveroot, '/', 'correlations', '/', 'PCA', '/', 'total',  '/', sprintf('%s_avg_corr_svd0.90.mat', feature)], 'Y_hat', '-v7.3');
+        
+        %initalize 
+        Y_hat = {};
+    end
+end 
+
+%% make avg dtseries 
+clc;clear
+addpath(genpath('/local_raid1/01_software/toolboxes/cifti-matlab'));
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_ICA_FIX_test';
+features = {'Ahat', 'E'}
+X={};
+
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx}
+    disp(feature)
+    for seg = 1:4
+%         folder_name = [saveroot,'/', 'dt_result','/', 'PCA', '/', sprintf('seg%d',seg),'/', feature]
+%         if not(exist(folder_name,'dir'))
+%             mkdir(folder_name)
+%         end 
+            for layer=0:5
+            
+                % Load cifti -10k
+                folder_path = '/combinelab/02_data/01_HCP/7T_MOVIE_2mm/100610/MNINonLinear/Results/tfMRI_MOVIE1_7T_AP/';
+                files = dir(fullfile(folder_path, 'tfMRI_MOVIE1_7T_AP_Atlas_MSMAll.10k.dtseries.nii'));
+            
+                file_path = fullfile(folder_path, files.name);
+                cii = ciftiopen(file_path, 'wb_command');
+                cii = rmfield(cii, 'cdata');
+            
+                % Load correlation
+                load([saveroot, '/', 'correlations', '/', 'PCA', '/total', '/', sprintf('%s_avg_corr_svd0.90.mat', feature)]);
+         
+                Y_hat = Y_hat{layer+1};
+            
+                % Update cdata and diminfo
+                cii.cdata = Y_hat';
+                cii.diminfo{1, 1}.length = size(Y_hat', 1);
+                cii.diminfo{1, 2}.length = size(Y_hat', 2);
+                cii.diminfo{1, 1}.models(3:end) = []; % subcortex removal
+            
+                % Concatenate cdata for each feature
+                if isempty(X)
+                    X = cii;
+                else
+                    X.cdata = cat(2, X.cdata, cii.cdata);
+                end  
+            end
+            
+            save_file_name = ([feature,'_', 'avg','.dtseries.nii']);
+            ciftisavereset(X, fullfile(saveroot, 'dt_result/total', '/',  save_file_name), 'wb_command');
+
+            %initalize X 
+            X={};
+    end
+end

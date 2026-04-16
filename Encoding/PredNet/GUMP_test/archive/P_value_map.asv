@@ -1,0 +1,25 @@
+clc;clear
+
+% Load p values of prediction and error
+Prediction = load('/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/GUMP_test/correlations/6layers_32channel/10k/total/Ahat_avg_pval_svd0.90_s3.mat', 'p_value').p_value;
+Error = load('/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/GUMP_test/correlations/6layers_32channel/10k/total/E_avg_pval_svd0.90_s3.mat', 'p_value').p_value;
+
+
+%
+Prediction = Prediction(2:end);
+Error = Error(2:end);
+
+% 
+for layer = 1:5
+    for vertex = 1:18722
+
+       [~, rowIdx] = max(concatenated.(name)(:, vertex));
+                    rowIdx
+                    count.(name)(1, vertex) = rowIdx;
+    
+        prediction_idx{layer} = find(Prediction{layer}) < 0.05;
+        error_idx{layer} = find(Error{layer}) < 0.05;
+    end
+end
+
+%

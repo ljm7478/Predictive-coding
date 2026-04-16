@@ -1,0 +1,192 @@
+clc; clear;
+
+%% Parameters
+scanning_dates = {'241119_noT1', '241121_noT1', '241205_T1'};
+run_numbers = struct(...
+    'CirclePred', '01', 'CircleUnpred', '02', ...
+    'GarborFreqPred', '05', 'GarborFreqUnpred', '06', ...
+    'GarborOrientationPred', '03', 'GarborOrientationUnpred', '04', ...
+    'GarborSCPred', '07', 'GarborSCUnpred', '08');
+
+conditions = {'Pred', 'Unpred'};
+
+% Set the number of voxels and timesteps
+Nv = 91282; % Number of voxels
+Nt = 202;  % Number of timepoints
+
+% Paths
+base_path = '/combinelab2/03_user/jungmin/02_data/02_jmlee_fmri/02_fmri/Preprocessed/';
+save_path = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/Jmlee_test/fmri/';
+
+%% Iterate over all tasks and conditions
+clc;
+for task_idx = 1:numel(tasks)
+    for cond_idx = 1:numel(conditions)
+        task_name = [tasks{task_idx}, conditions{cond_idx}];
+        run_num = run_numbers.(task_name); % Get the corresponding run number
+        disp(['Processing task: ', task_name, ' (Run: ', run_num, ')']);
+        
+        % Iterate over all combinations of training and testing dates
+        for test_idx = 1:numel(scanning_dates)
+            % Select testing date
+            test_date = scanning_dates{test_idx};
+            % Select training dates (all dates except the testing date)
+            train_dates = scanning_dates(~ismember(1:numel(scanning_dates), test_idx));
+            
+            disp(['Training on: ', strjoin(train_dates, ', ')]);
+            disp(['Testing on: ', test_date]);
+            
+            % Initialize storage
+            fmri_train = zeros(Nv, Nt, numel(train_dates), 'single');
+            fmri_test = zeros(Nv, Nt, 1, 'single');
+
+            % Process training data
+            disp('Processing training data...');
+            for train_date_idx = 1:numel(train_dates)
+                fmripath = fullfile(base_path, train_dates{train_date_idx}, 'output/ciftify/sub-01/MNINonLinear/Results/');
+                % Use the same `run-01` for all training dates
+                foldername = ['task-', task_name, '_run-01'];
+                filename = fullfile(fmripath, foldername, [foldername, '_Atlas_s3.dtseries.nii']);
+                disp(['Loading training file: ', filename]);
+
+                % Open CIFTI file
+                cii = ciftiopen(filename, 'wb_command');
+                data = double(cii.cdata(:, :)); % Extract all data
+                
+                % Standardization
+                data = bsxfun(@minus, data, mean(data, 2));
+                data = bsxfun(@rdivide, data, std(data, [], 2));
+                
+                % Store processed data
+                fmri_train(:, :, train_date_idx) = data;
+            end
+
+            % Save training data
+            train_file = fullfile(save_path, ['training_fmri_' task_name '_train_' strjoin(train_dates, '_') '.mat']);
+            save(train_file, 'fmri_train', '-v7.3');
+            disp(['Saved training data: ', train_file]);
+
+            % Process testing data
+            disp('Processing testing data...');
+            fmripath = fullfile(base_path, test_date, 'output/ciftify/sub-01/MNINonLinear/Results/');
+            % Use `run-01` for testing as well
+            foldername = ['task-', task_name, '_run-01'];
+            filename = fullfile(fmripath, foldername, [foldername, '_Atlas_s3.dtseries.nii']);
+            disp(['Loading testing file: ', filename]);
+            
+            % Open CIFTI file
+            cii = ciftiopen(filename, 'wb_command');
+            data = double(cii.cdata(:, :)); % Extract all data
+            
+            % Standardization
+            data = bsxfun(@minus, data, mean(data, 2));
+            data = bsxfun(@rdivide, data, std(data, [], 2));
+            
+            % Store processed data
+            fmri_test(:, :, 1) = data;
+
+            % Save testing data
+            test_file = fullfile(save_path, ['testing_fmri_' task_name '_test_' test_date '.mat']);
+            save(test_file, 'fmri_test', '-v7.3');
+            disp(['Saved testing data: ', test_file]);
+        end
+    end
+end
+
+disp('All tasks processed successfully.');
+
+
+
+
+
+
+
+
+
+
+
+%% This code is for processing the BOLD fMRI response to natural movies - original to WHEN code 
+% jmlee version
+clc;clear
+%% Parameters
+scanning_dates = {'241119_noT1', '241121_noT1', '241205_T1'};
+tasks = {'Circle', 'GarborFreq', 'GarborOrientation', ...
+         'GarborSC', 'Movie'};
+conditions = {'Pred', 'Unpred'};
+
+% Set the number of voxels and timesteps
+Nv = 91282; % Number of voxels
+Nt = 202;  % Number of timepoints
+
+% Paths
+base_path = '/combinelab2/03_user/jungmin/02_data/02_jmlee_fmri/02_fmri/Preprocessed/';
+save_path = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/Jmlee_test/fmri/';
+
+%%
+clc;
+for task_idx = 1:numel(tasks)
+    for cond_idx = 1:numel(conditions)
+        task_name = [tasks{task_idx},conditions{cond_idx}];
+        disp(['Processing task: ', task_name]);
+        
+        % Select training and testing runs
+        train_dates = scanning_dates(1:2); % First two for training
+        test_date = scanning_dates{3}; % Last one for testing
+        disp(['Processing train_dates: ', train_dates]);
+        disp(['Processing test_date: ', test_date]);
+        
+        % Initialize storage
+        fmri_train = zeros(Nv, Nt, numel(train_dates), 'single');
+        fmri_test = zeros(Nv, Nt, 1, 'single');
+
+        % Process training data
+        disp('Processing training data...');
+        for train_idx = 1:numel(train_dates)
+            fmripath = fullfile(base_path, train_dates{train_idx}, 'output/ciftify/sub-01/MNINonLinear/Results/');
+            foldername = ['task-', task_name, '_run-', sprintf('%02d', train_idx)];
+            filename = fullfile(fmripath, foldername, [foldername, '_Atlas_s3.dtseries.nii']);
+            disp(['Loading training file: ', filename]);
+            
+            % Open CIFTI file
+            cii = ciftiopen(filename, 'wb_command');
+            data = double(cii.cdata(:, :)); % Extract all data
+            
+            % Standardization
+            data = bsxfun(@minus, data, mean(data, 2));
+            data = bsxfun(@rdivide, data, std(data, [], 2));
+            
+            % Store processed data
+            fmri_train(:, :, train_idx) = data;
+        end
+
+        % Save training data
+        train_file = fullfile(save_path, ['training_fmri_' task_name '.mat']);
+        save(train_file, 'fmri_train', '-v7.3');
+        disp(['Saved training data: ', train_file]);
+
+        % Process testing data
+        disp('Processing testing data...');
+        fmripath = fullfile(base_path, test_date, 'output/ciftify/sub-01/MNINonLinear/Results/');
+        filename = fullfile(fmripath, ['task-', task_name, '_run-03_Atlas_s3.dtseries.nii']);
+        disp(['Loading testing file: ', filename]);
+        
+        % Open CIFTI file
+        cii = ciftiopen(filename, 'wb_command');
+        data = double(cii.cdata(:, :)); % Extract all data
+        
+        % Standardization
+        data = bsxfun(@minus, data, mean(data, 2));
+        data = bsxfun(@rdivide, data, std(data, [], 2));
+        
+        % Store processed data
+        fmri_test(:, :, 1) = data;
+
+        % Save testing data
+        test_file = fullfile(save_path, ['testing_fmri_' task_name '.mat']);
+        save(test_file, 'fmri_test', '-v7.3');
+        disp(['Saved testing data: ', test_file]);
+    end
+end
+
+disp('All tasks processed successfully.');
+

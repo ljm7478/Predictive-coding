@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/code/PredNet/GUMP_test/original_prednet/kitti_pretrain/encoding -type f ! -path *__pycache__*)",
+      "Bash(grep -E \"\\\\.\\(txt|json|yaml|yml|cfg|config|ini|properties\\)$\")",
+      "Bash(grep -E \"\\\\.\\(m|py|sh|bash\\)$\")",
+      "Bash(ls -lah /combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/code/PredNet/GUMP_test/original_prednet/kitti_pretrain/encoding/*.m)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(find /combinelab/03_user/jungmin/01_project/02_PredNet -type f -name *.py)",
+      "Bash(ls -la /combinelab/03_user/jungmin/01_project/02_PredNet/jmPNET/*.py)",
+      "Bash(grep -r legacy_prednet_support /combinelab/03_user/jungmin/01_project/02_PredNet --include=*.py)",
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(curl -s -L -o /tmp/caucheteux2023.html \"https://doi.org/10.1038/s41562-022-01516-2\")",
+      "Bash(curl -s -L -o /tmp/rajimehr2024.html \"https://doi.org/10.1016/j.neuron.2024.09.019\")",
+      "Bash(curl:*)",
+      "WebFetch(domain:doi.org)",
+      "WebFetch(domain:www.nature.com)",
+      "WebSearch",
+      "Read(//tmp/**)",
+      "WebFetch(domain:linkinghub.elsevier.com)",
+      "WebFetch(domain:pmc.ncbi.nlm.nih.gov)",
+      "WebFetch(domain:hal.science)",
+      "WebFetch(domain:www.sciencedirect.com)",
+      "WebFetch(domain:www.cell.com)",
+      "WebFetch(domain:pubmed.ncbi.nlm.nih.gov)",
+      "WebFetch(domain:www.semanticscholar.org)",
+      "Bash(python3 -m json.tool)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:europepmc.org)",
+      "WebFetch(domain:icss.ac.ir)",
+      "WebFetch(domain:www.biorxiv.org)",
+      "WebFetch(domain:discovery.researcher.life)",
+      "WebFetch(domain:news.mit.edu)"
+    ]
+  }
+}

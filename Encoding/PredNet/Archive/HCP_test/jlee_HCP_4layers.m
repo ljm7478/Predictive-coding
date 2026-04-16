@@ -1,0 +1,1021 @@
+%% Step1: calculate the temporal mean and standard deviation of the feature time series of CNN units
+clc;clear
+% dir
+dataroot = '/combinelab/03_user/jungmin/01_project/02_PredNet/jmPNET/data/03_Titanic/result/HCP/4layers_32channel';
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+features = {'MOVIE1_Ahat', 'MOVIE2_Ahat', 'MOVIE3_Ahat', 'MOVIE4_Ahat', 'MOVIE1_E', 'MOVIE2_E', 'MOVIE3_E', 'MOVIE4_E'};
+
+%make save dir
+folder_name = [saveroot,'/', 'feature_maps', '/', '4layers_32channel', '/']
+if not(exist(folder_name,'dir'))
+    mkdir(folder_name)
+end
+
+
+for i = 1:3
+    
+    X={};
+
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature)
+       
+        name_index = strfind(feature, '_');  % Find the index of the underscore
+        feature_name= feature(name_index+1:end);  % Extract the part after the underscore
+        disp(feature_name)
+
+        seg_name= feature(1:6);  % Extract the part after the underscore
+        disp(seg_name)
+
+        % calculate the temporal mean 
+        secpath = [dataroot, '/', 'h5', '/' , seg_name, '/', sprintf('%s%d.h5', feature, i)]
+        lay_feat = h5read(secpath,'/predimg');
+        dim = size(lay_feat)
+    
+        lay_feat_mean = sum(lay_feat, length(dim)) / dim(end);
+                
+        disp(['save average for layer', num2str(i)])
+        
+        h5create([saveroot, '/', 'feature_maps', '/', '4layers_32channel', '/',sprintf('%s%d_feature_maps_avg.h5', feature, i)],'/data',...
+            [size(lay_feat_mean)],'Datatype','single');
+        h5write([saveroot, '/', 'feature_maps', '/','4layers_32channel', '/', sprintf('%s%d_feature_maps_avg.h5', feature, i)],'/data', lay_feat_mean);
+
+    end
+end
+   
+% calculate the temporal standard deviation
+    
+for i = 1:3
+    
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature)
+        
+        seg_name= feature(1:6);  % Extract the part after the underscore
+        disp(seg_name)
+
+        disp(['start std for layer', num2str(i)])
+    
+        secpath = [dataroot, '/', 'h5', '/', seg_name, '/',  sprintf('%s%d.h5', feature, i)];
+        lay_feat = h5read(secpath,'/predimg');
+        dim = size(lay_feat)
+    
+        lay_feat_mean = h5read([saveroot, '/', 'feature_maps', '/','4layers_32channel', '/', sprintf('%s%d_feature_maps_avg.h5', feature, i)],'/data');
+    
+        lay_feat = bsxfun(@minus, lay_feat, lay_feat_mean);
+        lay_feat = lay_feat.^2;
+        dim = size(lay_feat);
+    
+        lay_feat_std = zeros([dim(1:end-1),1]); 
+        lay_feat_std = lay_feat_std + sum(lay_feat,length(dim));
+    
+        lay_feat_std = sqrt(lay_feat_std/(dim(end)-1));
+        lay_feat_std(lay_feat_std==0) = 1;
+        
+        disp(['save average for layer', num2str(i)])
+        
+        h5create([saveroot, '/', 'feature_maps', '/', '4layers_32channel', '/',sprintf('%s%d_feature_maps_std.h5', feature, i)],'/data',...
+            [size(lay_feat_std)],'Datatype','single');
+        h5write([saveroot,'/','feature_maps', '/',  '4layers_32channel', '/',sprintf('%s%d_feature_maps_std.h5', feature, i)],'/data',lay_feat_std);
+        
+        disp('start next layer!')
+    end
+end
+disp('fin!')
+
+
+%% Step1.5: MOVIE1-4 concat before PCA - Ahat 
+clc;clear
+
+
+%dir
+dataroot = '/combinelab/03_user/jungmin/01_project/02_PredNet/jmPNET/data/03_Titanic/result/HCP/4layers_32channel';
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+features = {'MOVIE1_Ahat', 'MOVIE2_Ahat', 'MOVIE3_Ahat', 'MOVIE4_Ahat'}
+
+
+X = {}; % Initialize a cell array to store lay_feat matrices for each layer
+
+for i = 1:3
+    disp(['layer is ', num2str(i)])
+
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature);
+       
+        name_index = strfind(feature, '_');  % Find the index of the underscore
+        feature_name = feature(name_index+1:end);  % Extract the part after the underscore
+        disp(feature_name);
+        
+        seg_name= feature(1:6);  % Extract the part after the underscore
+        disp(seg_name)
+
+        % Step 1: load mean and standard deviation
+        disp('load mean and std')
+        lay_feat_mean = h5read(fullfile(saveroot, 'feature_maps', '/','4layers_32channel', '/', sprintf('%s%d_feature_maps_avg.h5', feature, i)), '/data');
+        lay_feat_std = h5read(fullfile(saveroot, 'feature_maps', '/', '4layers_32channel', '/', sprintf('%s%d_feature_maps_std.h5', feature, i)), '/data');
+        
+        % Load lay_feat
+        disp('load lay_feat')
+        secpath = fullfile(dataroot, '/', 'h5', '/', seg_name, '/', sprintf('%s%d.h5', feature, i));
+        lay_feat = h5read(secpath, '/predimg');
+    
+        % standardize of lay_feat
+        disp('normalization begins')
+        lay_feat = bsxfun(@minus, lay_feat, lay_feat_mean);
+        lay_feat = bsxfun(@rdivide, lay_feat, lay_feat_std);
+        lay_feat(isnan(lay_feat)) = 0; % Assign 0 to NaN values
+
+        % Reshape standardize lay_feat to features-by-time
+        disp('reshape begins')
+        dim = size(lay_feat);
+        lay_feat = reshape(lay_feat, prod(dim(1:end-1)), dim(end));
+
+        X{i,feature_idx} = lay_feat; 
+    end
+    
+end
+
+% Concatenate all X_layer matrices in X into X_concat
+
+for i = 1:3
+    name=sprintf('%s%d_MOVIE1_4_feature_maps', feature_name, i)
+    X_concat = cat(2, X{i, 1}, X{i, 2}, X{i, 3}, X{i, 4});
+    eval([name, '= X_concat;']);
+    
+    %save
+    h5create([saveroot, '/', 'feature_maps', '/', '4layers_32channel', '/', sprintf('%s%d_1-4_concatenated_feature.h5', feature_name, i)],'/data',...
+        [size(X_concat)],'Datatype','single');
+    h5write([saveroot,'/','feature_maps', '/',  '4layers_32channel', '/', sprintf('%s%d_1-4_concatenated_feature.h5', feature_name, i)],'/data',X_concat);
+end
+
+%% Step1.5: MOVIE1-4 concat before PCA - Error channel divide
+clc;clear
+
+%dir
+dataroot = '/combinelab/03_user/jungmin/01_project/02_PredNet/jmPNET/data/03_Titanic/result/HCP/4layers_32channel';
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+features = {'MOVIE1_E', 'MOVIE2_E', 'MOVIE3_E', 'MOVIE4_E'}; 
+
+
+X = {}; % Initialize a cell array to store lay_feat matrices for each layer
+
+for i = 1:3
+    disp(['layer is ', num2str(i)])
+
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature);
+       
+        name_index = strfind(feature, '_');  % Find the index of the underscore
+        feature_name = feature(name_index+1:end);  % Extract the part after the underscore
+        disp(feature_name);
+        
+        seg_name= feature(1:6);  % Extract the part after the underscore
+        disp(seg_name)
+
+        % Step 1: Calculate mean and standard deviation
+        disp('load mean and std')
+        lay_feat_mean = h5read([saveroot, '/', 'feature_maps', '/', '4layers_32channel', '/', sprintf('%s%d_feature_maps_avg.h5', feature, i)], '/data');
+        lay_feat_std = h5read([saveroot, '/','feature_maps', '/', '4layers_32channel', '/', sprintf('%s%d_feature_maps_avg.h5', feature, i)], '/data');
+        disp(['before dim reduced size of lay_feat_mean is ', num2str(size(lay_feat_mean))]);
+        disp(['before dim reduced size of lay_feat_std is ', num2str(size(lay_feat_std))]);
+        
+        half_channel = size(lay_feat_mean,1);
+        half_channel = half_channel/2;
+        
+        lay_feat_mean_1st_half= lay_feat_mean(1:half_channel, :,:,:);
+        lay_feat_mean_2nd_half= lay_feat_mean(half_channel+1:end,:,:,:); 
+        lay_feat_mean = lay_feat_mean_1st_half + lay_feat_mean_2nd_half; 
+        clear lay_feat_mean_1st_half lay_feat_mean_2nd_half
+        disp(['after dim reduced size of lay_feat_mean is ', num2str(size(lay_feat_mean))]);
+    
+         
+        lay_feat_std_1st_half = lay_feat_std(1:half_channel, :,:,:);
+        lay_feat_std_2nd_half = lay_feat_std(half_channel+1:end,:,:,:); 
+        lay_feat_std = lay_feat_std_1st_half + lay_feat_std_2nd_half; 
+        clear lay_feat_std_1st_half lay_feat_std_2nd_half
+        disp(['after dim reduced size of lay_feat_std is ', num2str(size(lay_feat_std))]);
+        
+        %load lay_feat
+        disp('load lay_feat')
+        secpath = [dataroot, '/', 'h5', '/', seg_name, '/', sprintf('%s%d.h5', feature, i)];
+        lay_feat = h5read(secpath,'/predimg');
+         
+        half_channel = size(lay_feat,1);
+        half_channel = half_channel/2;
+    
+        lay_feat_1st_half= lay_feat(1:half_channel,:,:,:); 
+        lay_feat_2nd_half = lay_feat(half_channel+1:end,:,:,:);
+        lay_feat = lay_feat_1st_half+lay_feat_2nd_half;
+        clear lay_feat_1st_half lay_feat_2nd_half
+        disp(['after dim reduced size of lay_feat is ', num2str(size(lay_feat))]);
+    
+        % Normalization of lay_feat
+        disp('normalization begins')
+        lay_feat = bsxfun(@minus, lay_feat, lay_feat_mean);
+        lay_feat = bsxfun(@rdivide, lay_feat, lay_feat_std);
+        lay_feat(isnan(lay_feat)) = 0; % Assign 0 to NaN values
+
+        % Reshape normalized lay_feat to features-by-time
+        disp('reshape begins')
+        dim = size(lay_feat);
+        lay_feat = reshape(lay_feat, prod(dim(1:end-1)), dim(end));
+
+        X{i,feature_idx } = lay_feat; 
+
+    end
+    
+end
+
+% Concatenate all X_layer matrices in X into X_concat
+
+for i = 1:3
+    name=sprintf('%s%d_MOVIE1_3_feature_maps', feature_name, i)
+    X_concat = cat(2, X{i, 1}, X{i, 2}, X{i, 3}, X{i,4});
+    eval([name, '= X_concat;']);
+    
+    %save
+    h5create([saveroot, '/', 'feature_maps', '/', '4layers_32channel', '/', sprintf('%s%d_1-4_concatenated_feature.h5', feature_name, i)],'/data',...
+        [size(X_concat)],'Datatype','single');
+    h5write([saveroot,'/','feature_maps', '/', '4layers_32channel', '/', sprintf('%s%d_1-4_concatenated_feature.h5', feature_name, i)],'/data',X_concat);
+end
+
+%% Step2: PCA   
+
+clc;clear
+
+%dir
+dataroot = '/combinelab/03_user/jungmin/01_project/02_PredNet/jmPNET/data/03_Titanic/result/HCP/4layers_32channel';
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+%make save dir
+folder_name = [saveroot,'/', 'X', '/', 'PCA', '/', '4layers_32channel', '/']
+if not(exist(folder_name,'dir'))
+    mkdir(folder_name)
+end
+
+
+% % % % % % % % % % SVD-updating algorithm % % % % % % % % %
+
+Niter = 2; % number of iteration to compute principle component
+percp = 0.90; % explain 99% of the variance of every movie segments
+disp(['percp is ', num2str(percp)])
+
+features = { 'Ahat', 'E'};
+
+for i = 1:3
+    disp(['layer is ', num2str(i)])
+
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature);
+     
+
+        k0 = 0;
+        for iter =  1  : Niter
+            disp(['iteration #: ', num2str(iter)])
+            
+            %load lay_feat 
+            disp('load regularized lay_feat')
+            
+            secpath = [saveroot,'/','feature_maps', '/', '4layers_32channel', '/', sprintf('%s%d_1-4_concatenated_feature.h5', feature, i)];
+            lay_feat = h5read(secpath,'/data');
+            dim = size(lay_feat)
+
+            disp('amri_sig_isvd start')
+        
+            if iter == 1
+                [B, S, k0] = amri_sig_isvd(lay_feat, 'var', percp);
+            else
+                [B, S, k0] = amri_sig_isvd(lay_feat, 'var',  percp, 'init', {B,S});
+            end  
+        
+            disp(['Iteration ', num2str(iter), ' completed for', feature, num2str(i)]);
+        end
+        
+        disp('diag(s) begins')
+        
+        s = diag(S);
+        
+        disp('start saving SVD_layer');
+        % save principal components
+        save([saveroot, '/', 'X', '/', 'PCA', '/', '4layers_32channel', '/', sprintf('%s%d_feature_maps_svd_0.90.mat', feature, i)], 'B', 's', '-v7.3');
+        disp(['SVD_layer for', feature, ' saved']);
+        
+        clear B s S lay_feat
+    end
+end
+
+    
+
+%% Step3: Processed the hrf
+clc; clear 
+
+% dir
+dataroot = '/combinelab/03_user/jungmin/01_project/02_PredNet/jmPNET/data/03_Titanic/result/HCP/4layers_32channel';
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+
+% The sampling rate should be equal to the sampling rate of CNN feature
+% maps. If the CNN extracts the feature maps from movie frames with 30
+% frames/second, then srate = 30. It's better to set srate as even number
+% for easy downsampling to match the sampling rate of fmri (2Hz).
+srate = 24; %original code is at TR=2, [if TR=1 && srate is 25] then make it into 12.5 
+
+% Here is an example of using pre-defined hemodynamic response function
+% (HRF) with positive peak at 4s.
+p  = [5, 16, 1, 1, 6, 0, 32];
+hrf = spm_hrf(1/srate,p);
+hrf = hrf(:);
+% figure; plot(0:1/srate:p(7),hrf);
+
+features = { 'Ahat', 'E'};
+
+for i = 1:3
+    disp(['layer is ', num2str(i)])
+
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature);
+             
+        %load lay_feat 
+        disp('load regularized and conatenated lay_feat')
+        
+        secpath = [saveroot,'/','feature_maps', '4layers_32channel', '/',  sprintf('%s%d_1-4_concatenated_feature.h5', feature, i)];
+        lay_feat = h5read(secpath,'/data');
+        
+        %load svd
+        load([saveroot,'/', 'X', '/', 'PCA', '/', '4layers_32channel', '/', sprintf('%s%d_feature_maps_svd_0.90.mat', feature, i)], 'B');
+
+        disp('compute X with svd applied')
+        X = lay_feat'*B/sqrt(size(B,1)); % Y: #time-by-#components
+    
+        disp('compute ts')
+        ts = conv2(hrf,X); % convolude with hrf
+        ts = ts(4*srate+1:4*srate+size(X,1),:);
+        ts = ts(srate:1*srate:end,:); % downsampling to match fMRI  %OG TR at 2 => ts = ts(srate+1:2*srate:end,:); 
+    
+        disp('start saving')
+        
+        filename = sprintf('%s%d_feature_maps_svd_0.90_hrf.mat', feature, i);
+        save([saveroot,'/', 'X', '/', 'PCA', '/', '4layers_32channel', '/',   filename], 'ts', '-v7.3');
+        
+        disp([saveroot,'/', 'X', '/', 'PCA', '/', '4layers_32channel', '/',  filename])
+        disp(['SVD_layer for ',feature, num2str(i), ' saved']);
+    
+        
+        clear ts lay_feat
+        
+    end
+end
+
+
+%% Step3: No PCA ->  hrf
+clc; clear 
+
+% dir
+dataroot = '/combinelab/03_user/jungmin/01_project/02_PredNet/jmPNET/data/03_Titanic/result/HCP/4layers_32channel';
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+
+% The sampling rate should be equal to the sampling rate of CNN feature
+% maps. If the CNN extracts the feature maps from movie frames with 30
+% frames/second, then srate = 30. It's better to set srate as even number
+% for easy downsampling to match the sampling rate of fmri (2Hz).
+srate = 24; %original code is at TR=2, [if TR=1 && srate is 25] then make it into 12.5 
+
+% Here is an example of using pre-defined hemodynamic response function
+% (HRF) with positive peak at 4s.
+p  = [5, 16, 1, 1, 6, 0, 32];
+hrf = spm_hrf(1/srate,p);
+hrf = hrf(:);
+% figure; plot(0:1/srate:p(7),hrf);
+
+features = {'Ahat', 'E'};
+
+for i = 1:3
+    disp(['layer is ', num2str(i)])
+
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature);
+             
+        %load lay_feat 
+        disp('load regularized and conatenated lay_feat')
+        
+        secpath = [saveroot,'/','feature_maps', '/', '4layers_32channel', '/',  sprintf('%s%d_1-4_concatenated_feature.h5', feature, i)];
+        lay_feat = h5read(secpath,'/data');
+       
+
+        disp('compute X with svd applied')
+        X = lay_feat'; % Y: #time-by-#components
+    
+        disp('compute ts')
+        ts = conv2(hrf,X); % convolude with hrf
+        ts = ts(4*srate+1:4*srate+size(X,1),:);
+        ts = ts(srate:1*srate:end,:); % downsampling to match fMRI  %OG TR at 2 => ts = ts(srate+1:2*srate:end,:); 
+    
+        disp('start saving')
+        
+        filename = sprintf('%s%d_feature_maps_svd_0.90_hrf.mat', feature, i);
+        save([saveroot,'/', 'X', '/', 'No_PCA', '/', '4layers_32channel', '/', filename], 'ts', '-v7.3');
+        
+        disp([saveroot,'/', 'X', '/', 'No_PCA', '/', '4layers_32channel', '/', filename])
+    
+        
+        clear ts lay_feat
+        
+    end
+end
+
+
+%% Step4: divided into seg 1-4 (approx. 15min each)
+clc; clear
+% dir
+dataroot = '/combinelab/03_user/jungmin/01_project/02_PredNet/jmPNET/data/03_Titanic/result/HCP/4layers_32channel';
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+features = { 'Ahat', 'E'};
+
+for i = 1:3
+    disp(['layer is ', num2str(i)])
+
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature);
+
+    %open ts
+    load([saveroot,'/', 'X', '/', 'PCA', '/', '4layers_32channel', '/',  sprintf('%s%d_feature_maps_svd_0.90_hrf.mat', feature, i)], 'ts');
+
+    % Size of the ts array
+    ts_size = size(ts)
+
+    Nv = [921, 918, 915, 901];
+
+    % Create a cell array to store the segments
+    segments = cell(1, 4);
+
+    % Calculate the start and end indices for each segment
+    start_indices = [1, cumsum(Nv(1:end-1)) + 1];
+    end_indices = cumsum(Nv);
+
+        % Extract each segment from ts and store it in the cell array
+        for seg = 1:4
+            segments = ts(start_indices(seg):end_indices(seg),:);
+    
+            % Save the segment into a separate file
+            segment_filename = [sprintf('%s%d_feature_maps_svd_0.90_hrf_seg%d.mat', feature, i, seg)];
+            save([saveroot,'/', 'X', '/', 'PCA', '/', '4layers_32channel', '/',  segment_filename], 'segments', '-v7.3');
+        end
+    end
+end
+
+%% Step5.2: make W
+clc; clear
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+features = {'Ahat','E'};
+
+
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx};
+    disp(feature); 
+    for layer = 1:3
+        for seg = 1:4
+            filename = sprintf('%s/X/No_PCA/4layers_32channel/%s%d_feature_maps_svd_0.90_hrf_seg%d.mat', saveroot, feature, layer, seg);
+            loaded_data = load(filename);
+            name = sprintf('%s%d_seg%d', feature, layer, seg)
+            concatenated.(name) = loaded_data.segments;
+            eval([name, '= concatenated.(name);']);
+%             X_total{end+1, 1} = name;  % Store the name
+%             X_total{end, 2} = loaded_data.segments;  % Store the segments
+        end
+    end
+
+end
+ 
+%Voxelwise_encoding
+lambda = [0.1:0.2:0.9];
+nfold = 9; %from paper 
+
+%load Y
+load([saveroot, '/' , 'Y', '/', 'fMRI_10k_sub1-15.mat']);
+sub_cii=sub_cii_15;
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+features = {'Ahat' , 'E'};
+
+
+for i = 1
+    subject = subjectIDs(i);
+    disp(['Voxelwise_encoding start sub ', num2str(subject)])
+    
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature)
+
+        for seg = 1:4
+            disp(['Segment: ', num2str(seg)]);
+           for layer = 1:3
+                disp(['Layer: ', num2str(layer)]);
+                
+                % Y calculate 
+                switch seg
+                    case 1
+                        disp(['seg is ', num2str(seg)])
+                        Y = cat(2, sub_cii{i}{2}, sub_cii{i}{3}, sub_cii{i}{4});
+                    case 2
+                        disp(['seg is ', num2str(seg)])
+                        Y = cat(2, sub_cii{i}{1}, sub_cii{i}{3}, sub_cii{i}{4});
+                    case 3
+                        disp(['seg is ', num2str(seg)])
+                        Y = cat(2, sub_cii{i}{1}, sub_cii{i}{2}, sub_cii{i}{4});
+                    case 4
+                        disp(['seg is ', num2str(seg)])
+                        Y = cat(2, sub_cii{i}{1}, sub_cii{i}{2}, sub_cii{i}{3});
+                end
+                
+                % X calculate (concat training set) 
+                X_tot = {};
+                for s = 1:4
+                    if s ~= seg
+                        disp([sprintf('current sement is %s and s is %s', num2str(seg), num2str(s))])
+                        disp([sprintf('%s%d_seg%d', feature, layer, s)])
+                        X_tot{end+1} = concatenated.(sprintf('%s%d_seg%d', feature, layer, s));
+                    end
+                end
+                X = cat(1, X_tot{:});
+                
+                %voxelwise encoding
+                [W, Rmat, Lambda] = voxelwise_encoding(X, Y', lambda, nfold);
+                
+                % save W (feature x voxel)
+                folder_name = [saveroot,'/', 'W','/','No_PCA','/', '4layers_32channel','/', sprintf('seg%d',seg)]
+                if not(exist(folder_name,'dir'))
+                    mkdir(folder_name)
+                end
+                
+                name = [num2str(subject), '_', feature, num2str(layer), '_W_svd0.9.mat']
+                save([folder_name,'/', name], 'W', '-v7.3');
+            end
+        end
+    end
+end
+
+%% Step5.2:X model featuremaps 
+% 
+% clc; clear
+% disp('Load model featuremaps')
+% 
+% %dir
+% saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+% 
+% features = { 'Ahat', 'E'};
+% 
+% for i = 0:5
+%     disp(['layer is ', num2str(i)])
+%     X = cell(1, 3);
+%     for feature_idx = 1:numel(features)
+%         feature = features{feature_idx};
+%         disp(feature);
+%         for seg = 1:4
+%             filename = sprintf('%s%d_feature_maps_svd_0.90_hrf_seg%d.mat', feature, i, seg);
+%             loaded_data = load(filename);
+%             X{seg} = loaded_data.segments;  % Replace 'semgnet' with the desired field name
+%         end
+%         name = sprintf('%s%d_2_4', feature, i);
+%         concatenated.(name)= cat(1, X{2},X{3},X{4});
+%         eval([name, ' = concatenated.(name);']);
+% 
+%     end
+% end
+% 
+% %Voxelwise_encoding 
+% lambda = [0.1:0.2:0.9];
+% nfold = 9; %from paper 
+% 
+% %load Y
+% load([saveroot, '/' , 'Y', '/', 'fMRI_10k_cortex.mat']);
+% subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+% features = {'Ahat'} %, 'E'};
+% 
+% 
+% for i = 1:15
+%     subject = subjectIDs(i);
+%     disp(['Voxelwise_encoding start sub ', num2str(subject)])
+% 
+%     sub_cii1_3 = cat(2, sub_cii{i}{2}, sub_cii{i}{3}, sub_cii{i}{4});
+% 
+%     for feature_idx = 1:numel(features)
+%         feature = features{feature_idx};
+%         disp(feature);
+% 
+%         for layer= 0:5
+% 
+%             name = sprintf('%s%d_2_4', feature, layer)
+%             argument = concatenated.(name);  
+% 
+%             [W, Rmat, Lambda] = voxelwise_encoding(argument, sub_cii1_3', lambda, nfold);
+% 
+%             % save W (feature x voxel)
+%             name = [num2str(subject), '_', feature, num2str(layer), '_W_svd0.9.mat'];
+%             save([saveroot,'/', 'W', '/', 'PCA',  '/', 'seg1', '/',  name], 'W', '-v7.3');  
+%         end
+%     end
+% end
+
+%% Step6.1: Yhat 
+
+% X model featuremaps 
+clc; clear
+disp('Load model featuremaps')
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+features = {'Ahat','E'};
+
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx};
+    disp(feature); 
+    for layer = 1
+        for seg = 1
+            filename = sprintf('%s/X/No_PCA/4layers_32channel/%s%d_feature_maps_svd_0.90_hrf_seg%d.mat', saveroot, feature, layer, seg);
+            loaded_data = load(filename);
+            name = sprintf('%s%d_seg%d', feature, layer, seg)
+            concatenated.(name) = loaded_data.segments;
+            eval([name, '= concatenated.(name);']);
+        end
+    end
+
+end
+disp('make Y_hat')
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+
+for i = 1
+    subject = subjectIDs(i)
+    disp(['Voxelwise_encoding start sub ', num2str(subject)])    
+    
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx}
+        disp(feature);
+        
+        for seg=1
+            folder_name = [saveroot,'/', 'Y_hat','/','PCA', '/',  '4layers_32channel','/',  sprintf('seg%d',seg)]
+            if not(exist(folder_name,'dir'))
+                mkdir(folder_name)
+            end
+            for layer=1
+
+                % X calculate
+                X = {};
+                for s = 1:4
+                    if s == seg
+                        disp(['s is ', num2str(s)])
+                        disp([sprintf('%s%d_seg%d', feature, layer, s)])
+                        X = concatenated.(sprintf('%s%d_seg%d', feature, layer, s));
+                    end
+                end
+
+                W = load([saveroot,'/', 'W', '/', 'No_PCA',  '/',  '4layers_32channel','/', sprintf('seg%d',seg), '/',num2str(subject), '_', feature, num2str(layer), '_W_svd0.9.mat']);
+                name = ['Y_pred_sub',num2str(subject),'_',feature, num2str(layer)] 
+                eval([name, '= X * W.W;']);
+                
+                %save Y_hat
+                Yhat = eval(name);
+                name2 = strcat(num2str(subject),'_', feature , num2str(layer), '_pred_svd0.90.mat');
+               
+                save([saveroot,'/', 'Y_hat','/', 'No_PCA', '/',  '4layers_32channel','/', sprintf('seg%d',seg),  '/',  name2], 'Yhat', '-v7.3');
+            end
+        end
+    end
+    
+end
+
+%% step6.2: correaltion between Y_predict and actual Y for test - single segment
+clc; clear
+disp('correaltion and p_values compute start')
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+features = {'Ahat', 'E'};
+
+load([saveroot, '/' , 'Y', '/', 'fMRI_10k_sub1-15.mat']);
+
+
+for i = 1
+    subject = subjectIDs(i)
+    
+    disp(['correalting' , subject])
+    
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx}
+        disp(feature)
+        
+        for layer= 1
+            for seg = 1
+                folder_name = [saveroot,'/', 'correlations','/', 'No_PCA', '/',  '4layers_32channel','/', sprintf('seg%d',seg)]
+                if not(exist(folder_name,'dir'))
+                    mkdir(folder_name)
+                end
+                
+                Y_pred = load([saveroot,'/', 'Y_hat','/','No_PCA', '/',  '4layers_32channel','/',  sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer),'_pred_svd0.90', '.mat')]);
+                Y_pred = Y_pred.Yhat;
+                
+                disp(['seg is ' , num2str(seg)])
+                
+                if seg == 1
+                    Y = sub_cii_15{i}{1};
+                elseif seg == 2
+                    Y = sub_cii_15{i}{2};
+                elseif seg == 3
+                    Y = sub_cii_15{i}{3};
+                else seg == 4
+                    Y = sub_cii_15{i}{4};
+                end
+                
+                [correlations, p_values] = auto_corr(Y',Y_pred);
+                
+                correlations = correlations';
+                
+                % save correlation (feature x voxel)
+                disp('save correlations')
+                
+                name = strcat(num2str(subject),'_', feature , num2str(layer), '_corr_svd0.90.mat')
+                save([saveroot,'/', 'correlations','/', 'No_PCA', '/',  '4layers_32channel','/', sprintf('seg%d',seg), '/', name], 'correlations', '-v7.3');
+
+            end
+        end
+    end
+end
+
+%% Step 6.1: concat Yhat for all segments + correalting with total movie fMRI
+clc; clear
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+features = {'Ahat', 'E'};
+
+load([saveroot, '/' , 'Y', '/', 'fMRI_10k_cortex.mat']);
+
+folder_name = [saveroot,'/', 'correlations','/', 'PCA', '/',  '4layers_32channel','/', 'total']
+if not(exist(folder_name,'dir'))
+    mkdir(folder_name)
+end
+
+for i = 1:15
+    subject = subjectIDs(i)
+    disp(i)
+    disp(['Voxelwise_encoding start sub ', num2str(subject)])    
+    
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx}
+        disp(feature);
+        for layer=0:3
+            for seg = 1:4
+                Y_hat = load([saveroot,'/', 'Y_hat','/','PCA', '/',  '4layers_32channel','/', sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer), '_pred_svd0.90.mat')]);
+                disp([saveroot,'/', 'Y_hat','/','PCA', '/',  '4layers_32channel','/', sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer), '_pred_svd0.90.mat')])
+                
+                %zscore
+                X{seg} = zscore(Y_hat.Yhat);
+
+            end
+            Y_pred = sprintf('%s%d_seg1_4', feature, layer)
+            
+            %concatenated zscored Y_hat for seg1-4
+            concatenated.(Y_pred)= cat(1, X{:});
+    
+            %correaltions
+            %load Y 
+            sub_cii1_4 = cat(2, sub_cii{i}{1}, sub_cii{i}{2}, sub_cii{i}{3}, sub_cii{i}{4});
+            [correlations, p_values] = auto_corr(sub_cii1_4',concatenated.(Y_pred));
+
+            correlations = correlations';
+
+            % save correlation (feature x voxel)
+            disp('save correlations')
+           
+            name = strcat(num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90', '.mat')
+            save([saveroot,'/', 'correlations','/', 'PCA', '/',  '4layers_32channel','/', 'total', '/', name], 'correlations', '-v7.3');
+        end
+    end
+end
+
+
+%% Step7: make dtseries - total
+clc;clear
+addpath(genpath('/local_raid1/01_software/HCPpipelines/global/matlab/cifti-matlab'));
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+features = {'Ahat', 'E'};
+
+folder_name = [saveroot,'/', 'dt_result','/', '4layers_32channel','/',  'total']
+if not(exist(folder_name,'dir'))
+    mkdir(folder_name)
+end
+X={} ;
+for i = 1:15
+    subject = subjectIDs(i)
+
+
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx}
+        disp(feature);
+        for layer=0:3
+            % Load cifti -10k
+            folder_path = '/combinelab/02_data/01_HCP/7T_MOVIE_2mm/100610/MNINonLinear/Results/tfMRI_MOVIE1_7T_AP/';
+            files = dir(fullfile(folder_path, 'tfMRI_MOVIE1_7T_AP_Atlas_MSMAll.10k.dtseries.nii'));
+    
+            file_path = fullfile(folder_path, files.name);
+            cii = ciftiopen(file_path, 'wb_command');
+            cii = rmfield(cii, 'cdata');
+    
+            %load correaltion
+            load([saveroot,'/', 'correlations','/','PCA', '/',  '4layers_32channel','/', 'total', '/', num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90']);
+            disp([saveroot,'/', 'correlations','/','PCA', '/', '4layers_32channel','/',  'total', '/', num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90']);
+            
+            % Update cdata and diminfo
+            cii.cdata = correlations;
+            cii.diminfo{1, 1}.length = size(correlations, 1);
+            cii.diminfo{1, 2}.length = size(correlations, 2);
+            cii.diminfo{1, 1}.models(3:end) = []; % subcortex removal
+            
+            % Concatenate cdata for each layer
+            if isempty(X)
+                X = cii;
+            else
+                X.cdata = cat(2, X.cdata, cii.cdata);
+            end
+        end
+        
+        % Save as dtseries
+        save_file_name = ([num2str(subject),'_', feature, '.dtseries.nii']);
+        ciftisavereset(X, fullfile(saveroot, 'dt_result', '/',  '4layers_32channel','/', 'total', '/', save_file_name), 'wb_command');
+
+        X={} ;
+    end
+end
+
+%% Step7: make dtseries - single sub
+clc;clear
+addpath(genpath('/local_raid1/01_software/HCPpipelines/global/matlab/cifti-matlab'));
+addpath(genpath('/local_raid1/01_software/toolboxes/cifti-matlab'));
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+features = {'Ahat','E'};
+X={};
+for i = 1
+    subject = subjectIDs(i)
+    
+    for seg = 1
+        folder_name = [saveroot,'/', 'dt_result','/', '4layers_32channel','/', sprintf('seg%d',seg)]
+        if not(exist(folder_name,'dir'))
+            mkdir(folder_name)
+        end
+        for feature_idx = 1:numel(features)
+            feature = features{feature_idx}
+            disp(feature);
+            
+            for layer=1
+                
+                % Load cifti -10k
+                folder_path = '/combinelab/02_data/01_HCP/7T_MOVIE_2mm/100610/MNINonLinear/Results/tfMRI_MOVIE1_7T_AP/';
+                files = dir(fullfile(folder_path, 'tfMRI_MOVIE1_7T_AP_Atlas_MSMAll.10k.dtseries.nii'));
+                
+                file_path = fullfile(folder_path, files.name);
+                cii = ciftiopen(file_path, 'wb_command');
+                cii = rmfield(cii, 'cdata');
+                
+                %load correaltion
+                load([saveroot,'/', 'correlations','/', 'No_PCA', '/',  '4layers_32channel','/', sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90.mat')]);
+                disp([sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90.mat')]);
+                
+                % Update cdata and diminfo
+                cii.cdata = correlations;
+                cii.diminfo{1, 1}.length = size(correlations, 1);
+                cii.diminfo{1, 2}.length = size(correlations, 2);
+                cii.diminfo{1, 1}.models(3:end) = []; % subcortex removal
+                
+                % Concatenate cdata for each layer
+                if isempty(X)
+                    X = cii;
+                else
+                    X.cdata = cat(2, X.cdata, cii.cdata);
+                end
+            end
+            % Save as dtseries
+            save_file_name = ([num2str(subject),'_', feature, '_No_PCA.dtseries.nii']);
+            ciftisavereset(X, fullfile(saveroot, 'dt_result', '/', '4layers_32channel','/', sprintf('seg%d',seg), '/',save_file_name), 'wb_command');
+            
+            %initialize
+            X={};
+        end
+    end
+end
+
+%% avg .mat
+clc;clear
+
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+num_layer = 3;
+features = {'Ahat', 'E'}
+
+Y_hat = {};
+
+
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx}
+    disp(feature)
+    for seg = 1:4
+%         folder_name = [saveroot,'/', 'dt_result','/', 'PCA', '/', sprintf('seg%d',seg),'/']
+%         if not(exist(folder_name,'dir'))
+%             mkdir(folder_name)
+%         end 
+        for layer= 0:3
+            sum_values = 0;
+            for i = 1:15
+                subject = subjectIDs(i)
+
+                % Load correlation
+                load([saveroot,'/', 'correlations','/', 'PCA', '/',  '4layers_32channel','/', 'total', '/', strcat(num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90.mat')]);
+                disp([sprintf('seg%d',seg), '/', strcat(num2str(subject),'_', feature , num2str(layer),'_corr_svd0.90.mat')]);
+         
+                sum_values = sum_values + correlations';
+            end
+        Y_hat{layer+1} = sum_values / 15;
+        end
+        save([saveroot, '/', 'correlations', '/', 'PCA', '/',  '4layers_32channel','/', 'total',  '/', sprintf('%s_avg_corr_svd0.90.mat', feature)], 'Y_hat', '-v7.3');
+        
+        %initalize 
+        Y_hat = {};
+    end
+end 
+
+%% make avg dtseries 
+clc;clear
+addpath(genpath('/local_raid1/01_software/HCPpipelines/global/matlab/cifti-matlab'));
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+features = {'Ahat', 'E'}
+X={};
+
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx}
+    disp(feature)
+    for seg = 1:4
+%         folder_name = [saveroot,'/', 'dt_result','/', 'PCA', '/', sprintf('seg%d',seg),'/', feature]
+%         if not(exist(folder_name,'dir'))
+%             mkdir(folder_name)
+%         end 
+            for layer=0:5
+            
+                % Load cifti -10k
+                folder_path = '/combinelab/02_data/01_HCP/7T_MOVIE_2mm/100610/MNINonLinear/Results/tfMRI_MOVIE1_7T_AP/';
+                files = dir(fullfile(folder_path, 'tfMRI_MOVIE1_7T_AP_Atlas_MSMAll.10k.dtseries.nii'));
+            
+                file_path = fullfile(folder_path, files.name);
+                cii = ciftiopen(file_path, 'wb_command');
+                cii = rmfield(cii, 'cdata');
+            
+                % Load correlation
+                load([saveroot, '/', 'correlations', '/', 'PCA', '/', '4layers_32channel','/',  sprintf('seg%d', seg), '/', sprintf('%s_avg_corr_svd0.90.mat', feature)]);
+         
+                Y_hat = Y_hat{layer+1};
+            
+                % Update cdata and diminfo
+                cii.cdata = Y_hat';
+                cii.diminfo{1, 1}.length = size(Y_hat', 1);
+                cii.diminfo{1, 2}.length = size(Y_hat', 2);
+                cii.diminfo{1, 1}.models(3:end) = []; % subcortex removal
+            
+                % Concatenate cdata for each feature
+                if isempty(X)
+                    X = cii;
+                else
+                    X.cdata = cat(2, X.cdata, cii.cdata);
+                end  
+            end
+            
+            save_file_name = ([feature,'_', 'avg','.dtseries.nii']);
+            ciftisavereset(X, fullfile(saveroot, 'dt_result', '4layers_32channel','/',  sprintf('seg%d', seg), '/',  save_file_name), 'wb_command');
+
+            %initalize X 
+            X={};
+    end
+end

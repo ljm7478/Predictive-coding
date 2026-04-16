@@ -1,0 +1,219 @@
+clc; clear;
+
+% Add paths
+addpath(genpath('/local_raid1/01_software/HCPpipelines/global/matlab/cifti-matlab'));
+addpath(genpath('/local_raid1/01_software/toolboxes/spm12'));
+addpath(genpath('/local_raid1/01_software/toolboxes/cifti-matlab'));
+
+% Set paths
+% basedir = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/GUMP_test/encoding_analysis/original_prednet/result_orig_mk_stimulus/';
+basedir = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/GUMP_test/encoding_analysis/modified_prednet/';
+
+layer_type = 'layer4';
+pred_dir = fullfile(basedir, layer_type, 'Ahat');
+pe_dir   = fullfile(basedir, layer_type, 'E');
+
+subjects = {'sub-01','sub-02','sub-03','sub-04','sub-05','sub-06','sub-09','sub-10','sub-14','sub-15','sub-16','sub-17','sub-18','sub-19','sub-20'};
+n_subjects = length(subjects);
+n_layers = 7;
+
+% Load one subject to get voxel count
+sample = load(fullfile(pred_dir, subjects{1}, [subjects{1} '_avgcorr_lambda5.mat']));
+n_voxels = size(sample.concat_corr, 2);
+
+% Initialize arrays
+diff_net_all = zeros(n_subjects, n_layers, n_voxels);
+diff_ratio_log_all = zeros(n_subjects, n_layers, n_voxels);
+diff_ratio_bounded_all = zeros(n_subjects, n_layers, n_voxels);
+
+safe_eps = 1e-3;  % safe epsilon for numerical stability
+
+% Load differences for all subjects/layers
+for s = 1:n_subjects
+    subject_id = subjects{s};
+    fprintf('Loading %s...\n', subject_id);
+    pred_corr = load(fullfile(pred_dir, subject_id, [subject_id '_avgcorr_lambda5.mat'])).concat_corr;
+    pe_corr   = load(fullfile(pe_dir, subject_id, [subject_id '_avgcorr_lambda5.mat'])).concat_corr;
+    
+    diff_net_all(s, :, :) = pred_corr - pe_corr;
+    diff_ratio_log_all(s, :, :) = log((pred_corr + safe_eps) ./ (pe_corr + safe_eps));
+    diff_ratio_bounded_all(s, :, :) = (pred_corr + safe_eps) ./ (pred_corr + pe_corr + safe_eps);
+end
+
+% Load template for saving
+cii_template = ciftiopen('/combinelab2/03_user/jungmin/02_data/01_Gump/01_FG_preprocessed/sub-01/sub-01_ciftify/ciftify/sub-01/MNINonLinear/Results_MNI152NLin2009cAsym/ses-movie_task-movie_run-1/ses-movie_task-movie_run-1_Atlas_s0.dtseries.nii', 'wb_command');
+
+% Output directory
+outdir = fullfile(basedir, layer_type, 'Prediction_vs_PE_perlayer');
+if ~exist(outdir, 'dir'); mkdir(outdir); end
+
+% Preallocate concat arrays
+% Net diff
+avg_net_diff_concat = zeros(n_layers, n_voxels);
+t_map_net_concat = zeros(n_layers, n_voxels);
+sig_map_net_concat = zeros(n_layers, n_voxels);
+
+% Log ratio diff
+avg_ratio_log_concat = zeros(n_layers, n_voxels);
+t_map_ratio_log_concat = zeros(n_layers, n_voxels);
+sig_map_ratio_log_concat = zeros(n_layers, n_voxels);
+
+% Bounded ratio diff
+avg_ratio_bounded_concat = zeros(n_layers, n_voxels);
+t_map_ratio_bounded_concat = zeros(n_layers, n_voxels);
+sig_map_ratio_bounded_concat = zeros(n_layers, n_voxels);
+
+% Process each layer
+for l = 1:n_layers
+    layer_str = sprintf('Layer%d', l);
+    fprintf('\n--- Processing %s ---\n', layer_str);
+
+    % Net diff
+    net_diff = squeeze(diff_net_all(:, l, :));
+    [~, p_map_net, ~, stats_net] = ttest(net_diff);
+    t_map_net = stats_net.tstat;
+    avg_net_diff = mean(net_diff, 1);
+
+    p_fdr_net = mafdr(p_map_net', 'BHFDR', true);
+    sig_mask_net = p_fdr_net < 0.05;
+    sig_map_net = avg_net_diff(:) .* sig_mask_net(:);
+
+    avg_net_diff_concat(l, :) = avg_net_diff;
+    t_map_net_concat(l, :) = t_map_net;
+    sig_map_net_concat(l, :) = sig_map_net;
+
+    % Log ratio diff
+    ratio_log_diff = squeeze(diff_ratio_log_all(:, l, :));
+    [~, p_map_ratio_log, ~, stats_ratio_log] = ttest(ratio_log_diff);
+    t_map_ratio_log = stats_ratio_log.tstat;
+    avg_ratio_log = mean(ratio_log_diff, 1);
+
+    p_fdr_ratio_log = mafdr(p_map_ratio_log', 'BHFDR', true);
+    sig_mask_ratio_log = p_fdr_ratio_log < 0.05;
+    sig_map_ratio_log = avg_ratio_log(:) .* sig_mask_ratio_log(:);
+
+    avg_ratio_log_concat(l, :) = avg_ratio_log;
+    t_map_ratio_log_concat(l, :) = t_map_ratio_log;
+    sig_map_ratio_log_concat(l, :) = sig_map_ratio_log;
+
+    % Bounded ratio diff
+    ratio_bounded_diff = squeeze(diff_ratio_bounded_all(:, l, :));
+    [~, p_map_ratio_bounded, ~, stats_ratio_bounded] = ttest(ratio_bounded_diff);
+    t_map_ratio_bounded = stats_ratio_bounded.tstat;
+    avg_ratio_bounded = mean(ratio_bounded_diff, 1);
+
+    p_fdr_ratio_bounded = mafdr(p_map_ratio_bounded', 'BHFDR', true);
+    sig_mask_ratio_bounded = p_fdr_ratio_bounded < 0.05;
+    sig_map_ratio_bounded = avg_ratio_bounded(:) .* sig_mask_ratio_bounded(:);
+
+    avg_ratio_bounded_concat(l, :) = avg_ratio_bounded;
+    t_map_ratio_bounded_concat(l, :) = t_map_ratio_bounded;
+    sig_map_ratio_bounded_concat(l, :) = sig_map_ratio_bounded;
+end
+
+% %% (3) Save whole-brain maps
+% 
+% % Net diff
+% cii_template.cdata = avg_net_diff_concat';
+% cii_template.diminfo{1,1}.length = size(cii_template.cdata, 1);
+% cii_template.diminfo{1,2}.length = size(cii_template.cdata, 2);
+% cii_template.diminfo{1,1}.models(3:end) = [];
+% ciftisavereset(cii_template, fullfile(outdir, ['net_diff_' layer_type '.dtseries.nii']), 'wb_command');
+% 
+% cii_template.cdata = t_map_net_concat';
+% cii_template.diminfo{1,1}.length = size(cii_template.cdata, 1);
+% cii_template.diminfo{1,2}.length = size(cii_template.cdata, 2);
+% cii_template.diminfo{1,1}.models(3:end) = [];
+% ciftisavereset(cii_template, fullfile(outdir, ['tmap_net_' layer_type '.dtseries.nii']), 'wb_command');
+% 
+% cii_template.cdata = sig_map_net_concat';
+% cii_template.diminfo{1,1}.length = size(cii_template.cdata, 1);
+% cii_template.diminfo{1,2}.length = size(cii_template.cdata, 2);
+% cii_template.diminfo{1,1}.models(3:end) = [];
+% ciftisavereset(cii_template, fullfile(outdir, ['fdr_pmap_net_' layer_type '.dtseries.nii']), 'wb_command');
+% 
+% % Log ratio diff
+% cii_template.cdata = avg_ratio_log_concat';
+% cii_template.diminfo{1,1}.length = size(cii_template.cdata, 1);
+% cii_template.diminfo{1,2}.length = size(cii_template.cdata, 2);
+% cii_template.diminfo{1,1}.models(3:end) = [];
+% ciftisavereset(cii_template, fullfile(outdir, ['log_ratio_diff_' layer_type '.dtseries.nii']), 'wb_command');
+% 
+% cii_template.cdata = t_map_ratio_log_concat';
+% cii_template.diminfo{1,1}.length = size(cii_template.cdata, 1);
+% cii_template.diminfo{1,2}.length = size(cii_template.cdata, 2);
+% cii_template.diminfo{1,1}.models(3:end) = [];
+% ciftisavereset(cii_template, fullfile(outdir, ['tmap_log_ratio_' layer_type '.dtseries.nii']), 'wb_command');
+% 
+% cii_template.cdata = sig_map_ratio_log_concat';
+% cii_template.diminfo{1,1}.length = size(cii_template.cdata, 1);
+% cii_template.diminfo{1,2}.length = size(cii_template.cdata, 2);
+% cii_template.diminfo{1,1}.models(3:end) = [];
+% ciftisavereset(cii_template, fullfile(outdir, ['fdr_pmap_log_ratio_' layer_type '.dtseries.nii']), 'wb_command');
+% 
+% % Bounded ratio diff
+% cii_template.cdata = avg_ratio_bounded_concat';
+% cii_template.diminfo{1,1}.length = size(cii_template.cdata, 1);
+% cii_template.diminfo{1,2}.length = size(cii_template.cdata, 2);
+% cii_template.diminfo{1,1}.models(3:end) = [];
+% ciftisavereset(cii_template, fullfile(outdir, ['bounded_ratio_diff_' layer_type '.dtseries.nii']), 'wb_command');
+% 
+% cii_template.cdata = t_map_ratio_bounded_concat';
+% cii_template.diminfo{1,1}.length = size(cii_template.cdata, 1);
+% cii_template.diminfo{1,2}.length = size(cii_template.cdata, 2);
+% cii_template.diminfo{1,1}.models(3:end) = [];
+% ciftisavereset(cii_template, fullfile(outdir, ['tmap_bounded_ratio_' layer_type '.dtseries.nii']), 'wb_command');
+% 
+% cii_template.cdata = sig_map_ratio_bounded_concat';
+% cii_template.diminfo{1,1}.length = size(cii_template.cdata, 1);
+% cii_template.diminfo{1,2}.length = size(cii_template.cdata, 2);
+% cii_template.diminfo{1,1}.models(3:end) = [];
+% ciftisavereset(cii_template, fullfile(outdir, ['fdr_pmap_bounded_ratio_' layer_type '.dtseries.nii']), 'wb_command');
+% 
+% fprintf('All maps saved in %s\n', outdir);
+
+
+%% (5) Save Visual + MT + TPJ ROI-masked Net diff map + Save ROI mask as dscalar.nii (optional)
+
+fprintf('\n--- Applying Visual + MT + TPJ ROI mask to Net diff ---\n');
+
+% Load MMP atlas (Glasser 2016)
+label_32k = ciftiopen('/combinelab/02_data/99_parcellation/Glasser2016/Q1-Q6_RelatedValidation210.CorticalAreas_dil_Final_Final_Areas_Group_Colors.32k_fs_LR.dlabel.nii', 'wb_command');
+
+vertex = label_32k.cdata;
+if size(vertex,2) > 1
+    vertex = vertex(:,1); % Use first column if multi-map
+end
+
+roi_labels = [ 
+    1, 181, 3, 183, 4, 184, 5, 185, ...
+    55, 235, 56, 236, 57, 237, ...
+    142, 322, 145, 325, 146, 326];
+
+roi_voxels = find(ismember(vertex, roi_labels));
+
+roi_mask = zeros(1, n_voxels);
+roi_mask(roi_voxels) = 1;
+
+%% Save ROI mask itself as dscalar.nii
+roi_mask_cii = cii_template;
+roi_mask_cii.cdata = roi_mask';  % ONLY 59412 x 1, no repeat
+roi_mask_cii.diminfo{1,1}.length = size(roi_mask_cii.cdata, 1);
+roi_mask_cii.diminfo{1,2}.length = size(roi_mask_cii.cdata, 2);
+roi_mask_cii.diminfo{1,1}.models(3:end) = [];
+
+ciftisavereset(roi_mask_cii, fullfile(outdir, ['Visual_MT_TPJ_ROI_mask_' layer_type '.dscalar.nii']), 'wb_command');
+fprintf('Saved Visual+MT+TPJ ROI mask as dscalar.nii\n');
+
+%% Apply mask to Net diff
+masked_avg_net_diff_concat = avg_net_diff_concat .* roi_mask;
+
+cii_template.cdata = masked_avg_net_diff_concat';
+cii_template.diminfo{1,1}.length = size(cii_template.cdata, 1);
+cii_template.diminfo{1,2}.length = size(cii_template.cdata, 2);
+cii_template.diminfo{1,1}.models(3:end) = [];
+ciftisavereset(cii_template, fullfile(outdir, ['net_diff_' layer_type '_Visual_MT_TPJ_ROImasked.dtseries.nii']), 'wb_command');
+
+fprintf('Net diff with Visual+MT+TPJ ROI mask saved.\n');
+
+

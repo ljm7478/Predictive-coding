@@ -1,0 +1,263 @@
+%% Voxel-wise Encoding Script for AlexNet (Replication of Wen et al., 2018)
+%
+% This script performs a voxel-wise encoding analysis using AlexNet features
+% to replicate the findings of Wen et al. (2018). It is built upon the
+% file structures and paths provided in 'process_cnn_features.m' and 
+% 'process_fmri_data.m'.
+%
+% fMRI Data Processing (based on process_fmri_data.m):
+% - Training: Averages 2 repetitions (data1, data2) and concatenates 18 segments.
+% - Testing: Averages 10 repetitions for each of the 5 test segments.
+%
+% Feature Data Processing (based on process_cnn_features.m):
+% - Training: Uses the pre-computed 'AlexNet_feature_maps_pcareduced_concatenated.h5'.
+% - Testing: Uses the pre-computed 'AlexNet_feature_maps_pcareduced_test[1-5].h5'.
+%
+clc;clear
+addpath(genpath('/local_raid1/01_software/HCPpipelines/global/matlab/cifti-matlab'));
+addpath(genpath('/local_raid1/01_software/toolboxes/spm12'));
+addpath(genpath('/local_raid1/01_software/spm12'));
+addpath(genpath('/local_raid1/01_software/toolboxes/cifti-matlab'));
+%% --- 1. Configuration ---
+
+% --- [MODIFIED] Subject list (3 subjects) ---
+% Assumes 'subject1', 'subject2', 'subject3' based on your fMRI preprocessing.
+num_subjects = {'subject1', 'subject2', 'subject3'};
+
+% --- AlexNet Layer Names (from process_cnn_features.m) ---
+layername = {'/conv1';'/conv2';'/conv3';'/conv4';'/conv5';'/fc6';'/fc7';'/fc8'};
+
+% --- AlexNet Processed Feature Path (saveroot from process_cnn_features.m) ---
+alexnet_feature_root = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/AlexNet/encoding/';
+
+% --- [MODIFIED] AlexNet fMRI Data Path (savepath from process_fmri_data.m) ---
+% This script assumes fMRI data is saved in subject-specific folders
+% (e.g., .../AlexNet/fMRI/subject1/training_fmri.mat)
+alexnet_fmri_root = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/AlexNet/fMRI/';
+
+% --- CIFTI Template File (for brain map visualization) ---
+% (Using path specified in process_fmri_data.m script)
+fmripath_template = '/combinelab2/03_user/jungmin/02_data/03_NeuralEncodingDecoding/subject1/video_fmri_dataset/subject1/fmri/';
+filename_template = 'seg1/cifti/seg1_1_Atlas.dtseries.nii';
+cii_template = ciftiopen(fullfile(fmripath_template, filename_template),'wb_command');
+Nv = 59412; % Number of cortical surface vertices (from process_fmri_data.m)
+
+% --- Encoding Parameters ---
+lambda = [0.1:0.2:0.9]; % Candidate regularization parameters
+nfold = 3;              % Number of folds for cross-validation
+
+fprintf('--- Starting AlexNet Encoding Replication ---\n');
+
+%% --- 2. Voxel-wise Encoding Loop (Per Subject) ---
+
+for sub = 2:length(num_subjects)
+    subject_id = num_subjects{sub};
+    disp(['--- Processing Subject: ', subject_id, ' ---']);
+    
+    % --- Define subject-specific save directory for encoding results ---
+    saveroot = fullfile(alexnet_feature_root, 'encoding_results', subject_id);
+    if ~exist(saveroot, 'dir')
+        mkdir(saveroot)
+    end
+    
+    % --- 1) Load & Process Training fMRI Data ---
+    fprintf('Loading and processing training fMRI for %s...\n', subject_id);
+    try
+        % Load training_fmri.mat file (contains fmri.data1 and fmri.data2)
+        fmri_train_file = fullfile(alexnet_fmri_root,subject_id, 'training_fmri.mat');
+        load(fmri_train_file, 'fmri'); % Load 'fmri' struct
+        
+        % Average the 2 repetitions (as per Wen et al. standard)
+        % fmri.data1/data2 shape: [Voxels, Time, Segments]
+        avg_fmri = (fmri.data1 + fmri.data2) / 2;
+        
+        % Concatenate all 18 segments
+        [Nv_check, Nt, Ns] = size(avg_fmri);
+        if Nv_check ~= Nv
+            error('Voxel count mismatch in training fMRI. Expected %d, got %d', Nv, Nv_check);
+        end
+        % Reshape from [Voxels, Time, Segs] to [Voxels, Time*Segs]
+        % Then transpose to [Time*Segs, Voxels] for the encoding function
+        train_fmri = reshape(avg_fmri, Nv, Nt*Ns)';
+        
+    catch ME
+        warning('Failed to load training fMRI data for %s. Skipping subject. Error: %s', subject_id, ME.message);
+        continue; % Skip to the next subject
+    end
+    
+    % --- 2) Load & Process Test fMRI Data ---
+    fprintf('Loading and processing testing fMRI for %s...\n', subject_id);
+    try
+        % Load testing_fmri.mat file (contains fmritest.test1 ... test5)
+        fmri_test_file = fullfile(alexnet_fmri_root, subject_id, 'testing_fmri.mat');
+        load(fmri_test_file, 'fmritest'); % Load 'fmritest' struct
+    catch ME
+        warning('Failed to load testing fMRI data for %s. Skipping subject. Error: %s', subject_id, ME.message);
+        continue; % Skip to the next subject
+    end
+    
+    % --- 3) Train Encoding Model (Per Layer) ---
+    fprintf('Training encoding models for %s...\n', subject_id);
+    for lay = 1 : length(layername)
+        disp(['  Layer: ', layername{lay}]);
+        
+        % Load the concatenated AlexNet training features (Y_train)
+        % This file is generated by process_cnn_features.m
+        secpath = [alexnet_feature_root,'AlexNet_feature_maps_pcareduced_concatenated.h5'];  
+        if ~exist(secpath, 'file')
+            warning('Missing concatenated AlexNet training file: %s. Skipping layer.', secpath);
+            continue; % Skip to the next layer
+        end
+        Y_train = h5read(secpath,[layername{lay},'/data']); % Shape: [Time*Segs, Features]
+        
+        % Check if time dimensions of fMRI and features match
+        if size(Y_train, 1) ~= size(train_fmri, 1)
+            warning('Time dimension mismatch for layer %s. Feat: %d, fMRI: %d. Skipping.', ...
+                    layername{lay}, size(Y_train, 1), size(train_fmri, 1));
+            continue; % Skip to the next layer
+        end
+        
+        % Call the encoding function
+        % Y: [Time x Features], X: [Time x Voxels]
+        [W, Rmat, Lambda] = voxelwise_encoding(Y_train, train_fmri, lambda, nfold);
+    
+        % Save AlexNet weights (W) and validation results
+        file_name = ['W_AlexNet_lambda5_', layername{lay}(2:end) , '.mat'];
+        save(fullfile(saveroot, file_name), 'W', 'Rmat', 'Lambda', '-v7.3');
+    end
+    
+    % --- 4) Test Encoding Model (Per Run, Per Layer) ---
+    fprintf('Testing encoding models for %s...\n', subject_id);
+    
+    test_segs = 1:5; % Loop through the 5 test segments
+    
+    for run = test_segs 
+        run_name = ['test', num2str(run)];
+        all_corr_per_run = cell(length(layername), 1); % To store results for all layers for this run
+        
+        % Average the 10 repetitions of test fMRI to get the "ground truth"
+        % fmritest.test1 shape: [Voxels, Time, 10 Reps]
+        test_fmri_reps = fmritest.(run_name);
+        test_fmri_avg = mean(test_fmri_reps, 3); % Shape: [Voxels, Time]
+        test_fmri_avg_T = test_fmri_avg'; % Shape: [Time, Voxels]
+        
+        for lay = 1:length(layername)
+            
+            % Load AlexNet test features (Y_test) for this segment
+            secpath = [alexnet_feature_root, 'AlexNet_feature_maps_pcareduced_test', num2str(run), '.h5'];
+            if ~exist(secpath, 'file')
+                warning('Missing AlexNet test file: %s. Skipping.', secpath);
+                all_corr_per_run{lay} = zeros(1, Nv); % Fill with zero correlation
+                continue;
+            end
+            Y_test = h5read(secpath, [layername{lay}, '/data']); % Shape: [Time x Features]
+    
+            % Load trained AlexNet weights (W)
+            W_filename = fullfile(saveroot, ['W_AlexNet_lambda5_', layername{lay}(2:end), '.mat']);
+            if ~exist(W_filename, 'file')
+                warning('Missing W file: %s. Skipping layer.', W_filename);
+                all_corr_per_run{lay} = zeros(1, Nv); 
+                continue;
+            end
+            load(W_filename, 'W');
+    
+            % Predict fMRI signal: Y_test [Time x Feat] * W [Feat x Vox] = pred_fmri [Time x Vox]
+            pred_fmri = Y_test * W; 
+    
+            % Match time length (prediction and ground truth might differ by a few TRs)
+            min_len = min(size(pred_fmri, 1), size(test_fmri_avg_T, 1));
+            pred_fmri_run = pred_fmri(1:min_len, :);
+            test_fmri_run = test_fmri_avg_T(1:min_len, :);
+    
+            % Calculate correlation (voxel-wise)
+            correlation_scores = zeros(1, size(pred_fmri_run, 2)); % Shape: [1 x Voxels]
+            for v = 1:size(pred_fmri_run, 2)
+                correlation_scores(v) = corr(pred_fmri_run(:, v), test_fmri_run(:, v));
+            end
+            correlation_scores(isnan(correlation_scores)) = 0; % Set NaN values (e.g., from zero-variance voxels) to 0
+            all_corr_per_run{lay} = correlation_scores;
+        end
+        
+        % Save correlations for *all layers* for this *RUN*
+        concat_corr = cat(1, all_corr_per_run{:}); % Shape: [Layers x Voxels]
+        file_name = [subject_id,'_corr_AlexNet_lambda5_', run_name, '.mat'];
+        save(fullfile(saveroot, file_name), 'concat_corr', '-v7.3');
+    end
+    
+    % --- 5) Average Correlations Across Runs ---
+    fprintf('Averaging correlations for %s...\n', subject_id);
+    
+    per_layer = cell(length(layername), length(test_segs)); 
+    all_avg_corr = cell(length(layername), 1); 
+    
+    for lay = 1:length(layername)
+        for r_idx = 1:length(test_segs)
+            run = test_segs(r_idx);
+            run_name = ['test', num2str(run)];
+            
+            % Load AlexNet correlation file for this run
+            corr_filename = fullfile(saveroot, [subject_id,'_corr_AlexNet_lambda5_', run_name, '.mat']);
+            
+            if exist(corr_filename, 'file')
+                load(corr_filename, 'concat_corr'); % Shape: [Layers x Voxels]
+                per_layer{lay, r_idx} = concat_corr(lay,:); % Get this layer's data, Shape: [1 x Voxels]
+            else
+                warning('File not found: %s', corr_filename);
+            end
+        end
+    end
+    
+    % Calculate average across runs
+    for lay = 1:length(layername)
+        valid_runs = ~cellfun(@isempty, per_layer(lay, :)); % Find runs that were successfully processed
+        if any(valid_runs)
+            concat_corr_runs = cat(1, per_layer{lay, valid_runs}); % Shape: [NumRuns x Voxels]
+            avg_corr = mean(concat_corr_runs, 1); % Average across runs, Shape: [1 x Voxels]
+            all_avg_corr{lay} = avg_corr;
+        else
+            warning('No valid correlation data found for layer: %s', layername{lay});
+            all_avg_corr{lay} = zeros(1, Nv); % Fill with zeros if no data
+        end
+    end
+    
+    % Concatenate and save average correlations for all layers
+    concat_corr_avg_all_layers = cat(1, all_avg_corr{:}); % Shape: [Layers x Voxels]
+    file_name = [subject_id, '_avgcorr_AlexNet_lambda5.mat'];
+    save(fullfile(saveroot, file_name), 'concat_corr_avg_all_layers', '-v7.3');
+    
+    % --- 6) Save Results as CIFTI .dtseries file ---
+    fprintf('Saving CIFTI files for %s...\n', subject_id);
+    
+    % Save Cifti file per Run
+    for r_idx = 1:length(test_segs)
+        run = test_segs(r_idx);
+        run_name = ['test', num2str(run)];
+        file_name = [subject_id,'_corr_AlexNet_lambda5_', run_name, '.mat'];
+        if ~exist(fullfile(saveroot, file_name), 'file'), continue; end
+        load(fullfile(saveroot, file_name), 'concat_corr'); % Shape: [Layers x Voxels]
+        
+        run_cdata = cii_template; 
+        run_cdata.cdata = concat_corr'; % Transpose to [Voxels x Layers]
+        run_cdata.diminfo{1, 1}.length = Nv; % 59412
+        run_cdata.diminfo{1, 2}.length = size(run_cdata.cdata, 2); % Number of layers
+        run_cdata.diminfo{1, 1}.models(3:end) = []; % Clean up template info
+        
+        save_file_name = fullfile(saveroot, [subject_id,'_AlexNet_lambda5_corr_', run_name, '.dtseries.nii']);
+        ciftisavereset(run_cdata, save_file_name, 'wb_command');
+    end 
+    
+    % Save averaged-across-runs Cifti file
+    load(fullfile(saveroot, [subject_id, '_avgcorr_AlexNet_lambda5.mat']), 'concat_corr_avg_all_layers'); % Shape: [Layers x Voxels]
+    
+    avg_cdata = cii_template;
+    avg_cdata.cdata = concat_corr_avg_all_layers'; % Transpose to [Voxels x Layers]
+    avg_cdata.diminfo{1, 1}.length = Nv; % 59412
+    avg_cdata.diminfo{1, 2}.length = size(avg_cdata.cdata, 2); % Number of layers
+    avg_cdata.diminfo{1, 1}.models(3:end) = []; % Clean up template info
+    
+    save_file_name = fullfile(saveroot, [subject_id,'_AlexNet_lambda5_avgcorr.dtseries.nii']);
+    ciftisavereset(avg_cdata, save_file_name, 'wb_command');
+    
+end % --- End of Subject Loop ---
+
+fprintf('--- AlexNet Encoding Replication Finished for All Subjects! ---\n');%% Voxel-wise Encoding Script for AlexNet (Replication of Wen et al., 2018)

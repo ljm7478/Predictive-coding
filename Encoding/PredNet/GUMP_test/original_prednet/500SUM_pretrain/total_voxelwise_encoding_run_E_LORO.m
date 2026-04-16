@@ -1,0 +1,326 @@
+%% Voxel-wise Encoding Pipeline (LORO Evaluation + Final W Generation)
+%
+% This script performs LORO cross-validation AND trains a final model
+% using all data to save the W matrix for later beta map analysis.
+%
+% *** CORRECT LORO IMPLEMENTATION + FINAL W SAVING ***
+%
+% 1. LORO Loop (k=1...8):
+%    - Computes fold-specific Mean/Std/PCA (7 runs).
+%    - Generates fold-specific Y_train (7 runs) and Y_test (1 run).
+%    - Trains model on 7 runs, tests on 1 run.
+%    - Stores the test correlation for each fold.
+% 2. After LORO Loop:
+%    - Averages correlations across the 8 folds.
+%    - Saves the average LORO correlation map.
+% 3. Final Model Training (NEW STEP):
+%    - Computes Mean/Std/PCA using ALL 8 runs.
+%    - Generates Regressors for ALL 8 runs using these final stats.
+%    - Trains the final encoding model (W_final) using ALL 8 runs.
+%    - Saves the W_final matrix for each subject and layer.
+
+clc; clear;
+
+addpath(genpath('/local_raid1/01_software/HCPpipelines/global/matlab/cifti-matlab'));
+addpath(genpath('/local_raid1/01_software/toolboxes/spm12'));
+addpath(genpath('/local_raid1/01_software/spm12'));
+addpath(genpath('/local_raid1/01_software/toolboxes/cifti-matlab'));
+clc;
+%% --- Configuration ---
+FEATURE_TYPE = 'E'; % CHANGE THIS TO 'E' to analyze error features
+
+% --- Paths ---
+FEATURE_DATA_ROOT = '/combinelab/03_user/jungmin/01_project/02_PredNet/jmPNET/data/01_gump/result/prednet_original/h5/pt_kitti_ft_Lall_nt150/layer4';
+FMRI_DATA_ROOT = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/GUMP_test/fmri_new/';
+SAVE_ROOT = fullfile('/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/GUMP_test/encoding_analysis/original_prednet/kitti_pretrain_result/LORO/layer4/', FEATURE_TYPE); % Changed save root name
+CIFTI_TEMPLATE_FILE = '/combinelab2/03_user/jungmin/02_data/01_Gump/01_FG_preprocessed/sub-01/sub-01_ciftify/ciftify/sub-01/MNINonLinear/Results_MNI152NLin2009cAsym/ses-movie_task-movie_run-1/ses-movie_task-movie_run-1_Atlas_s0.dtseries.nii';
+
+
+layer_names = {'/E0'; '/E1'; '/E2'; '/E3'};
+
+num_layers = length(layer_names);
+
+all_runs = 0:7; % Use all 8 runs (seg0-seg7)
+num_folds = length(all_runs);
+
+PCA_VARIANCE_THRESHOLD = 0.99;
+STIMULUS_FRAMERATE = 25; % Hz
+FMRI_TR = 2.0;
+DOWNSAMPLE_FACTOR = STIMULUS_FRAMERATE * FMRI_TR;
+hrf_params = [5, 16, 1, 1, 6, 0, 32];
+hrf = spm_hrf(1/STIMULUS_FRAMERATE, hrf_params); hrf = hrf(:);
+
+lambdas = 0.1:0.2:0.9;
+nfold_inner = 3;
+subjects = {'sub-01', 'sub-02', 'sub-03', 'sub-04', 'sub-05', 'sub-06', 'sub-09', 'sub-10', 'sub-14', 'sub-15', 'sub-16', 'sub-17', 'sub-18', 'sub-19', 'sub-20'};
+
+clc;
+%% --- Start LORO Analysis ---
+cii_template = ciftiopen(CIFTI_TEMPLATE_FILE, 'wb_command');
+
+for subj_idx = 1:length(subjects)
+    subject = subjects{subj_idx};
+    fprintf('\n======================================================\n');
+    fprintf('--- Starting LORO Encoding for Subject: %s ---\n', subject);
+    fprintf('======================================================\n');
+    
+    subject_save_dir = fullfile(SAVE_ROOT, subject);
+    if ~exist(subject_save_dir, 'dir'), mkdir(subject_save_dir); end
+    
+    fmri_per_run_path = fullfile(FMRI_DATA_ROOT, subject, [subject, '_per_run_fmri.mat']);
+    if ~exist(fmri_per_run_path, 'file'), warning('Missing per-run fMRI data for %s. Skipping.', subject); continue; end
+    fmri_data_struct = load(fmri_per_run_path).fmri_data_per_run;
+    
+    all_subject_corrs = cell(num_layers, 1);
+    
+    for lay = 1:num_layers
+        fprintf('\n  Encoding for layer %s...\n', layer_names{lay});
+        test_corrs_all_folds = [];
+        
+        % --- LORO Cross-Validation Loop ---
+        for k_fold = 1:num_folds
+            test_run_idx = all_runs(k_fold);
+            train_run_indices = all_runs; train_run_indices(k_fold) = [];
+            fprintf('    Fold %d/%d: Testing on run %d...\n', k_fold, num_folds, test_run_idx+1);
+
+            % --- Step 1: Compute Fold-Specific Mean, Std, PCA (7 runs) ---
+            fprintf('      Step 1: Computing Mean, Std, PCA for Fold %d Training Data...\n', k_fold);
+            features_cell_2d = cell(1, length(train_run_indices));
+            for i = 1:length(train_run_indices) % Load training features
+                run_idx_train = train_run_indices(i); 
+                filepath = fullfile(FEATURE_DATA_ROOT, ['seg', num2str(run_idx_train), '_', FEATURE_TYPE, '.h5']);
+                if exist(filepath, 'file')
+                    features_4d = h5read(filepath, layer_names{lay}); 
+                    dims = size(features_4d); 
+                    features_cell_2d{i} = reshape(features_4d, prod(dims(1:end-1)), dims(end));
+                else
+                    warning('Missing training feature file: %s', filepath); 
+                end
+            end
+            all_train_features_2d = cat(2, features_cell_2d{:}); 
+            clear features_cell_2d;
+            lay_feat_mean_vec_fold = mean(all_train_features_2d, 2); 
+            lay_feat_std_vec_fold = std(all_train_features_2d, 0, 2);
+            lay_feat_std_vec_fold(lay_feat_std_vec_fold == 0) = 1;
+            template_path = fullfile(FEATURE_DATA_ROOT, ['seg0_', FEATURE_TYPE, '.h5']); 
+            template_dims = size(h5read(template_path, layer_names{lay}));
+            lay_feat_mean_fold = reshape(lay_feat_mean_vec_fold, template_dims(1:end-1)); 
+            lay_feat_std_fold = reshape(lay_feat_std_vec_fold, template_dims(1:end-1));
+            standardized_features = bsxfun(@minus, all_train_features_2d, lay_feat_mean_vec_fold); 
+            standardized_features = bsxfun(@rdivide, standardized_features, lay_feat_std_vec_fold);
+            standardized_features(isnan(standardized_features)) = 0;
+            
+            [B_fold, ~] = compute_pca(standardized_features, PCA_VARIANCE_THRESHOLD); 
+            clear all_train_features_2d standardized_features;
+
+            % --- Step 2: Generate Fold-Specific Regressors (Y_train & Y_test) ---
+            fprintf('      Step 2: Generating Regressors for Fold %d...\n', k_fold);
+            fmri_train_cell = cell(1, length(train_run_indices)); train_regressors_cell = cell(1, length(train_run_indices));
+            for i = 1:length(train_run_indices) % Generate Y_train
+                run_idx_train = train_run_indices(i); 
+                run_name = ['run', num2str(run_idx_train+1)];
+                fmri_train_cell{i} = fmri_data_struct.(run_name);
+                filepath = fullfile(FEATURE_DATA_ROOT, ['seg', num2str(run_idx_train), '_', FEATURE_TYPE, '.h5']); 
+                features_4d = h5read(filepath, layer_names{lay});
+                train_regressors_cell{i} = generate_regressors(features_4d, lay_feat_mean_fold, lay_feat_std_fold, B_fold, hrf, STIMULUS_FRAMERATE, DOWNSAMPLE_FACTOR);
+            end
+            fmri_train_data = cat(2, fmri_train_cell{:}); 
+            Y_train = cat(1, train_regressors_cell{:}); 
+            clear train_regressors_cell fmri_train_cell;
+            
+            run_name_test = ['run', num2str(test_run_idx+1)]; 
+            filepath_test = fullfile(FEATURE_DATA_ROOT, ['seg', num2str(test_run_idx), '_', FEATURE_TYPE, '.h5']);
+            features_4d_test = h5read(filepath_test, layer_names{lay}); % Generate Y_test
+            Y_test = generate_regressors(features_4d_test, lay_feat_mean_fold, lay_feat_std_fold, B_fold, hrf, STIMULUS_FRAMERATE, DOWNSAMPLE_FACTOR);
+            fmri_test = fmri_data_struct.(run_name_test); 
+            clear features_4d features_4d_test;
+
+            % --- Step 3: Train and Test Model for this Fold ---
+            fprintf(' Step 3: Training and Testing Model for Fold %d...\n', k_fold);
+            [W_fold, ~, ~] = voxelwise_encoding_new(Y_train, fmri_train_data', lambdas, nfold_inner);
+            pred_fmri = Y_test * W_fold;
+            min_len = min(size(pred_fmri, 1), size(fmri_test, 2)); pred_fmri = pred_fmri(1:min_len, :);
+            fmri_test_aligned = fmri_test(:, 1:min_len)';
+            corrs = diag(corr(pred_fmri, fmri_test_aligned)); corrs(isnan(corrs)) = 0;
+            test_corrs_all_folds = [test_corrs_all_folds, corrs];
+            clear Y_train Y_test fmri_train_data fmri_test pred_fmri W_fold;
+            
+        end % --- End of LORO Fold Loop (k_fold) ---
+        
+        % --- Average LORO correlations ---
+        avg_corrs = mean(test_corrs_all_folds, 2, 'omitnan'); % Use omitnan
+        avg_corrs(isnan(avg_corrs)) = 0; % Handle cases where all folds might be NaN for a voxel
+        all_subject_corrs{lay} = avg_corrs';
+        fprintf('    Finished LORO evaluation for layer %s.\n', layer_names{lay});
+        
+        % ===============================================================
+        % *** NEW SECTION: Train Final Model using ALL 8 Runs ***
+        % ===============================================================
+        fprintf('    Training final model using ALL 8 runs for layer %s...\n', layer_names{lay});
+        
+        % --- a) Compute Mean, Std, PCA using ALL 8 runs ---
+        features_cell_2d_all = cell(1, length(all_runs));
+        for i = 1:length(all_runs)
+            run_idx_all = all_runs(i); 
+            filepath = fullfile(FEATURE_DATA_ROOT, ['seg', num2str(run_idx_all), '_', FEATURE_TYPE, '.h5']);
+            if exist(filepath, 'file')
+                features_4d = h5read(filepath, layer_names{lay}); 
+                dims = size(features_4d); features_cell_2d_all{i} = reshape(features_4d, prod(dims(1:end-1)), dims(end));
+            else
+                warning('Missing feature file for final model: %s', filepath); 
+            end
+        end
+        all_features_2d_final = cat(2, features_cell_2d_all{:}); 
+        clear features_cell_2d_all;
+        lay_feat_mean_vec_final = mean(all_features_2d_final, 2); 
+        lay_feat_std_vec_final = std(all_features_2d_final, 0, 2);
+        lay_feat_std_vec_final(lay_feat_std_vec_final == 0) = 1;
+        lay_feat_mean_final = reshape(lay_feat_mean_vec_final, template_dims(1:end-1)); 
+        lay_feat_std_final = reshape(lay_feat_std_vec_final, template_dims(1:end-1));
+        standardized_features_final = bsxfun(@minus, all_features_2d_final, lay_feat_mean_vec_final); 
+        standardized_features_final = bsxfun(@rdivide, standardized_features_final, lay_feat_std_vec_final);
+        standardized_features_final(isnan(standardized_features_final)) = 0;
+        [B_final, ~] = compute_pca(standardized_features_final, PCA_VARIANCE_THRESHOLD); 
+        clear all_features_2d_final standardized_features_final;
+
+        % --- b) Generate Regressors for ALL 8 runs using final stats ---
+        fmri_all_runs_cell = cell(1, length(all_runs)); all_regressors_cell = cell(1, length(all_runs));
+        for i = 1:length(all_runs)
+            run_idx_all = all_runs(i); run_name = ['run', num2str(run_idx_all+1)]; 
+            fmri_all_runs_cell{i} = fmri_data_struct.(run_name);
+            filepath = fullfile(FEATURE_DATA_ROOT, ['seg', num2str(run_idx_all), '_', FEATURE_TYPE, '.h5']); 
+            features_4d = h5read(filepath, layer_names{lay});
+            all_regressors_cell{i} = generate_regressors(features_4d, lay_feat_mean_final, lay_feat_std_final, B_final, hrf, STIMULUS_FRAMERATE, DOWNSAMPLE_FACTOR);
+        end
+        fmri_all_data = cat(2, fmri_all_runs_cell{:}); 
+        clear fmri_all_runs_cell;
+        Y_all_final = cat(1, all_regressors_cell{:}); 
+        clear all_regressors_cell features_4d;
+
+        % --- c) Train Final Model ---
+        % voxelwise_encoding_new will do inner CV on the 8 runs to find lambda
+        [W_final, ~, Lambda_final] = voxelwise_encoding_new(Y_all_final, fmri_all_data', lambdas, nfold_inner);
+        
+        % --- d) Save Final W Matrix ---
+        save(fullfile(subject_save_dir, ['W_final_layer', num2str(lay), '.mat']), 'W_final', 'Lambda_final', '-v7.3');
+        fprintf('      Saved final W matrix (W_final_layer%d.mat) for subject %s.\n', lay, subject);
+        clear Y_all_final fmri_all_data W_final Lambda_final; % Clear large variables
+        
+    end % --- End of Layer Loop (lay) ---
+    
+    % --- Save LORO Average Correlation Map ---
+    final_corr_matrix = cat(1, all_subject_corrs{:});
+    save(fullfile(subject_save_dir, 'average_correlations_LORO.mat'), 'final_corr_matrix', '-v7.3');
+    
+    cii = cii_template;
+    if size(final_corr_matrix, 2) == size(cii.cdata, 1)
+        cii.cdata = final_corr_matrix'; % Transpose to [Voxels x Layers]
+    else
+         warning('Voxel count mismatch for LORO correlations! Subj %s. Skipping CIFTI save.', subject);
+         continue;
+    end
+    cii.diminfo{1, 1}.length = size(cii.cdata, 1);
+    cii.diminfo{1, 2}.length = size(cii.cdata, 2);
+    cii.diminfo{1, 1}.models(3:end) = [];
+    ciftisavereset(cii, fullfile(subject_save_dir, 'average_correlations_LORO.dtseries.nii'), 'wb_command');
+    fprintf('  Finished LORO encoding and saved final W maps for subject %s.\n', subject);
+    
+end % --- End of Subject Loop (subj_idx) ---
+
+fprintf('\n--- All LORO processing and Final W generation complete! ---\n');
+
+%% --- Helper Functions ---
+% (Include h5_write_safe, compute_pca, generate_regressors here)
+
+function h5_write_safe(filepath, dataset, data)
+    % (Same as previous version)
+     if ~exist(fileparts(filepath), 'dir'), mkdir(fileparts(filepath)); end
+    if exist(filepath, 'file')
+        try info = h5info(filepath); dataset_name_no_slash = dataset(2:end); found = false;
+            for d = 1:length(info.Datasets)
+                if strcmp(info.Datasets(d).Name, dataset_name_no_slash), found = true; break; end
+            end
+             if found 
+                 warning('Dataset %s already exists in %s. Overwriting.', dataset_name_no_slash, filepath); 
+             end
+        catch ME
+            warning('Could not read HDF5 info for %s. Error: %s. Overwriting.', filepath, ME.message);
+        end
+    end
+    try h5create(filepath, dataset, size(data), 'Datatype', 'single'); 
+        h5write(filepath, dataset, data);
+    catch ME
+        warning('Failed to write HDF5 dataset %s to %s. Error: %s', dataset, filepath, ME.message); 
+    end
+end
+
+function [B, s] = compute_pca(data, variance_threshold)
+    % (Same robust version)
+    if isempty(data), B = []; s = []; warning('Input data to compute_pca is empty.'); return; end
+    data(~isfinite(data)) = 0;
+
+    if size(data,1) > size(data,2)
+        R = data'*data / size(data,1);
+        try [U,S,~] = svd(R,'econ');
+        catch ME
+            warning('SVD did not converge. Attempting eig. Error: %s', E.message); 
+            [U,S] = eig(R); S = diag(S); [S, sortIdx] = sort(S, 'descend'); 
+            U = U(:, sortIdx); S = diag(S); 
+        end
+        s = diag(S); s = max(s, 0); if sum(s) < eps, B = []; 
+            warning('Sum of eigenvalues near zero in PCA.'); 
+            return; 
+        end
+        ratio = cumsum(s)/sum(s); Nc = find(ratio >= variance_threshold, 1, 'first'); 
+        if isempty(Nc)
+            Nc = size(U,2); 
+        end
+        s_subset = s(1:Nc); s_subset(s_subset <= eps) = eps; S_inv_sqrt = diag(1./sqrt(s_subset));
+        B = data * (U(:,1:Nc) * S_inv_sqrt / sqrt(size(data,1)));
+    else
+        R = data*data' / size(data,2);
+        try [U,S,~] = svd(R,'econ');
+        catch ME
+            warning('SVD did not converge. Attempting eig. Error: %s', E.message); 
+            [U,S] = eig(R); S = diag(S); [S, sortIdx] = sort(S, 'descend'); U = U(:, sortIdx); S = diag(S); end
+        s = diag(S); s = max(s, 0); 
+        if sum(s) < eps
+            B = []; warning('Sum of eigenvalues near zero in PCA.'); 
+            return; 
+        end
+        ratio = cumsum(s)/sum(s); Nc = find(ratio >= variance_threshold, 1, 'first'); 
+        if isempty(Nc)
+            Nc = size(U,2); 
+        end
+        B = U(:,1:Nc);
+    end
+end
+
+function regressors = generate_regressors(features_4d, f_mean, f_std, B, hrf, srate, downsample_factor)
+    % (Same robust version)
+     if isempty(B) || isempty(features_4d)
+         regressors = [] ;
+         warning('Empty PCA or features passed to generate_regressors.'); 
+         return; 
+     end
+    features_standardized = bsxfun(@minus, features_4d, f_mean); features_standardized = bsxfun(@rdivide, features_standardized, f_std);
+    features_standardized(isnan(features_standardized)) = 0;
+    dims = size(features_standardized); features_reshaped = reshape(features_standardized, prod(dims(1:end-1)), dims(end));
+    if size(features_reshaped, 1) ~= size(B, 1)
+       error('Dimension mismatch: features (%d) vs PCA components (%d)', size(features_reshaped, 1), size(B, 1));
+    end
+    Y = features_reshaped' * B; ts = conv2(Y, hrf, 'full');
+    hrf_peak_delay_frames = 4 * srate; start_idx = hrf_peak_delay_frames + 1; end_idx = hrf_peak_delay_frames + size(Y, 1);
+    if start_idx > size(ts, 1) || end_idx > size(ts, 1)
+        warning('HRF alignment indices out of bounds. Clamping...'); end_idx = min(end_idx, size(ts,1)); start_idx = min(start_idx, end_idx);
+    end
+    if start_idx > end_idx || start_idx < 1 
+        warning('Invalid HRF alignment range.'); 
+        regressors = []; 
+        return; 
+    end
+    ts = ts(start_idx : end_idx, :);
+    indices = round(1:downsample_factor:size(ts, 1)); indices = indices(indices <= size(ts,1));
+    regressors = ts(indices, :);
+end
+

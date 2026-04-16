@@ -1,0 +1,572 @@
+
+%% Step1:  W calculation  (prediction+error)
+clc; clear
+disp('Load model featuremaps')
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+features = {'Ahat','E'};
+
+ratio={}; 
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx};
+    disp(feature);
+    for layer = 0:3
+        for seg = 1:4
+            filename = sprintf('%s/X/PCA/4layers/%s%d_feature_maps_svd_0.90_hrf_seg%d.mat', saveroot, feature, layer, seg);
+            loaded_data = load(filename);
+            name = sprintf('%s%d_seg%d', feature, layer, seg)
+            concatenated.(name) = loaded_data.segments;
+            % eval([name, '= concatenated.(name);']);
+        end
+    end
+end
+
+%concat prediction & error
+for layer = 0:3
+    for seg = 1:4 
+        prediction_data = concatenated.(sprintf('%s%d_seg%d', features{1}, layer, seg));
+        error_data = concatenated.(sprintf('%s%d_seg%d', features{2}, layer, seg));
+        
+        name = sprintf('layer%d_seg%d', layer, seg);
+        ratio.(name) = cat(2, prediction_data, error_data);
+        eval([name, '= ratio.(name);']);
+        
+        % Calculate corrcoef to check if concatenation is correct
+        dim = size(prediction_data);
+        prediction_corr = corrcoef(ratio.(name)(:, 1:dim(2)), prediction_data);
+        error_corr = corrcoef(ratio.(name)(:, dim(2)+1:end), error_data);
+        
+        % Display correlation coefficients
+        fprintf('Layer %d, Segment %d:\n', layer, seg);
+        fprintf('Prediction Correlation:\n');
+        disp(prediction_corr);
+        fprintf('Error Correlation:\n');
+        disp(error_corr)
+    end
+end
+
+%Voxelwise_encoding
+lambda = [0.1:0.2:0.9];
+nfold = 9; %from paper
+
+%load Y
+load([saveroot, '/' , 'Y', '/', 'fMRI_10k_cortex.mat']);
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+
+
+for i = 1:15
+    subject = subjectIDs(i);
+    disp(['Voxelwise_encoding start sub', num2str(subject), sprintf(' layer%d_seg%d', layer, seg)])
+    for seg = 1:4
+        disp(['Segment: ', num2str(seg)]);
+        for layer = 0:3
+            disp(['Layer: ', num2str(layer)])
+
+            % Y calculate
+            switch seg
+                case 1
+                    disp(['seg is ', num2str(seg)])
+                    Y = cat(2, sub_cii{i}{2}, sub_cii{i}{3}, sub_cii{i}{4});
+                case 2
+                    disp(['seg is ', num2str(seg)])
+                    Y = cat(2, sub_cii{i}{1}, sub_cii{i}{3}, sub_cii{i}{4});
+                case 3
+                    disp(['seg is ', num2str(seg)])
+                    Y = cat(2, sub_cii{i}{1}, sub_cii{i}{2}, sub_cii{i}{4});
+                case 4
+                    disp(['seg is ', num2str(seg)])
+                    Y = cat(2, sub_cii{i}{1}, sub_cii{i}{2}, sub_cii{i}{3});
+            end
+
+            % X calculate (concat training set)
+            X_tot = {};
+            concatenated_data={};
+            for s = 1:4
+                disp([sprintf('current test segment is %s', num2str(seg))])
+                if s ~= seg
+                    disp([sprintf('layer%d_seg%d', layer, s)])
+                    concatenated_data{end+1} = ratio.(sprintf('layer%d_seg%d', layer, s));
+
+                    X_tot{s} = ratio.(sprintf('layer%d_seg%d', layer, s));
+
+                    % Calculate corrcoef to check correct structure
+                    corr = corrcoef(X_tot{s}, ratio.(sprintf('layer%d_seg%d', layer, s)));
+
+                    % Display correlation coefficients
+                    fprintf('Layer %d, Segment %d:\n', layer, s);
+                    disp(corr);
+                end
+            end
+
+            % Combine the cell array into a single matrix
+            X = cat(1, X_tot{:});
+
+            % Calculate corrcoef to check if concatenation is correct
+            A = size(concatenated_data{1}, 1);
+            B = size(concatenated_data{2}, 1);
+            C = size(concatenated_data{3}, 1);
+            total_corr1 = corrcoef(X((1:A), :), concatenated_data{1});
+            total_corr2 = corrcoef(X((A+1:A+B), :), concatenated_data{2});
+            total_corr3 = corrcoef(X((A+B+1:end), :), concatenated_data{3});
+
+            fprintf('Total Correlation 1:\n');
+            disp(total_corr1);
+            fprintf('Total Correlation 2:\n');
+            disp(total_corr2);
+            fprintf('Total Correlation 3:\n');
+            disp(total_corr3);
+
+
+            %voxelwise encoding
+            [W, Rmat, Lambda] = voxelwise_encoding(X, Y', lambda, nfold);
+%% 
+
+            % save W (feature x voxel)
+            folder_name = [saveroot,'/', 'W','/','PCA','/', '4layers', '/', 'ratio','/', sprintf('seg%d',seg)]
+            if not(exist(folder_name,'dir'))
+                mkdir(folder_name)
+            end
+
+            name = [num2str(subject), '_', sprintf('layer%d_seg%d', layer, seg), '_W_svd0.9.mat']
+            save([folder_name,'/', name], 'W', '-v7.3');
+        end
+    end
+end
+
+
+%% Step2: Yhat calc - total P+E - single segment
+
+% X model featuremaps 
+clc; clear
+disp('Load model featuremaps')
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+features = {'Ahat','E'};
+
+ratio={}; 
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx};
+    disp(feature);
+    for layer = 0:5
+        for seg = 1:4
+            filename = sprintf('%s/X/PCA/6layers/%s%d_feature_maps_svd_0.90_hrf_seg%d.mat', saveroot, feature, layer, seg);
+            loaded_data = load(filename);
+            name = sprintf('%s%d_seg%d', feature, layer, seg)
+            concatenated.(name) = loaded_data.segments;
+            % eval([name, '= concatenated.(name);']);
+        end
+    end
+end
+
+%concat prediction & error
+for layer = 0:5
+    for seg = 1:4 
+        prediction_data = concatenated.(sprintf('%s%d_seg%d', features{1}, layer, seg));
+        error_data = concatenated.(sprintf('%s%d_seg%d', features{2}, layer, seg));
+        
+        name = sprintf('layer%d_seg%d', layer, seg);
+        ratio.(name) = cat(2, prediction_data, error_data);
+        eval([name, '= ratio.(name);']);
+        
+        % Calculate corrcoef to check if concatenation is correct
+        dim = size(prediction_data);
+        prediction_corr = corrcoef(ratio.(name)(:, 1:dim(2)), prediction_data);
+        error_corr = corrcoef(ratio.(name)(:, dim(2)+1:end), error_data);
+        
+        % Display correlation coefficients
+        fprintf('Layer %d, Segment %d:\n', layer, seg);
+        fprintf('Prediction Correlation:\n');
+        disp(prediction_corr);
+        fprintf('Error Correlation:\n');
+        disp(error_corr)
+    end
+end
+
+disp('make Y_hat')
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+
+for i = 1:15
+    subject = subjectIDs(i)
+    disp(['Voxelwise_encoding start sub ', num2str(subject)])
+
+    for seg=1:4
+
+        for layer=0:5
+
+            % X calculate
+            X = {};
+            for s = 1:4
+                if s == seg
+                    disp(['s is ', num2str(s)])
+                    disp([sprintf('layer%d_seg%d', layer, s)])
+                    X = ratio.(sprintf('layer%d_seg%d', layer, s));
+                end
+            end
+
+            % save Y_hat
+            folder_name = [saveroot,'/', 'Y_hat','/','PCA','/', '6layers', '/', 'ratio','/', sprintf('seg%d',seg),'/']
+            if not(exist(folder_name,'dir'))
+                mkdir(folder_name)
+            end
+
+            W = load([saveroot,'/', 'W', '/', 'PCA',  '/', '6layers', '/', 'ratio','/',  sprintf('seg%d',seg), '/', num2str(subject), '_', sprintf('layer%d_seg%d', layer, seg), '_W_svd0.9.mat']);
+            name = ['Y_pred_sub',num2str(subject),'_',feature, num2str(layer)]
+            eval([name, '= X * W.W;']);
+
+            Yhat = eval(name);
+            name2 = strcat(num2str(subject),'_', sprintf('layer%d_seg%d', layer, seg), '_pred_svd0.90.mat')
+
+            save([folder_name,  name2], 'Yhat', '-v7.3');
+        end
+    end
+end
+
+%% step2: Yhat - prediction/ error single segment
+clc; clear
+disp('correaltion  compute start')
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+
+features = {'Ahat','E'};
+
+ratio={}; 
+for feature_idx = 1:numel(features)
+    feature = features{feature_idx};
+    disp(feature);
+    for layer = 0:5
+        for seg = 1:4
+            filename = sprintf('%s/X/PCA/6layers/%s%d_feature_maps_svd_0.90_hrf_seg%d.mat', saveroot, feature, layer, seg);
+            loaded_data = load(filename);
+            name = sprintf('%s%d_seg%d', feature, layer, seg)
+            concatenated.(name) = loaded_data.segments;
+            % eval([name, '= concatenated.(name);']);
+        end
+    end
+end
+
+%concat prediction & error
+for layer = 0:5
+    for seg = 1:4 
+        prediction_data = concatenated.(sprintf('%s%d_seg%d', features{1}, layer, seg));
+        error_data = concatenated.(sprintf('%s%d_seg%d', features{2}, layer, seg));
+        
+        name = sprintf('layer%d_seg%d', layer, seg);
+        ratio.(name) = cat(2, prediction_data, error_data);
+%         eval([name, '= ratio.(name);']);
+        
+        % Calculate corrcoef to check if concatenation is correct
+        dim = size(prediction_data);
+        prediction_corr = corrcoef(ratio.(name)(:, 1:dim(2)), prediction_data);
+        error_corr = corrcoef(ratio.(name)(:, dim(2)+1:end), error_data);
+        
+        % Display correlation coefficients
+        fprintf('Layer %d, Segment %d:\n', layer, seg);
+        fprintf('Prediction Correlation:\n');
+        disp(prediction_corr);
+        fprintf('Error Correlation:\n');
+        disp(error_corr)
+    end
+end
+
+for i = 1:15
+    subject = subjectIDs(i)
+    
+    disp(['correalting' , subject])
+    for feature_idx = 1:numel(features)
+        feature = features{feature_idx};
+        disp(feature);
+        for layer= 0:5
+            for seg = 1:4
+                %folder
+                prediction_folder_name = [saveroot,'/', 'ratio','/', '6layers', '/', 'Y_hat_P','/', sprintf('seg%d',seg),'/']
+                if not(exist(prediction_folder_name,'dir'))
+                    mkdir(prediction_folder_name)
+                end
+                
+                error_folder_name = [saveroot,'/', 'ratio','/', '6layers', '/', 'Y_hat_E','/', sprintf('seg%d',seg),'/']
+                if not(exist(error_folder_name,'dir'))
+                    mkdir(error_folder_name)
+                end
+                
+                
+                %load concatenated prediction+error W
+                W = load([saveroot,'/', 'ratio', '/', '6layers', '/', 'W','/',  sprintf('seg%d',seg), '/', num2str(subject), '_', sprintf('layer%d_seg%d', layer, seg), '_W_svd0.9.mat']);
+                W = W.W;
+                
+                % prediction
+                concat_data = ratio.(sprintf('layer%d_seg%d', layer, seg));
+                name= sprintf('layer%d_seg%d', layer, seg)
+                concat_data_dim = size(concat_data)
+                
+                prediction_data = concatenated.(sprintf('%s%d_seg%d', features{1}, layer, seg));
+                pre_dim=size(prediction_data)
+                
+                %segmentation into each prediction for each layer + seg
+                pre_W = W(1:pre_dim(2),:);
+                
+                %pre_Yhat make
+                pre_Yhat = prediction_data * pre_W;
+                
+                name = [num2str(subject), '_', sprintf('Ahat%d_seg%d', layer, seg), '_W_svd0.9.mat']
+                save([prediction_folder_name,'/', name], 'pre_Yhat', '-v7.3');
+                
+                % Error
+                %segmentation into each error for each layer + seg
+                err_W = W((pre_dim(2)+1:end),:);
+                
+                error_data = concatenated.(sprintf('%s%d_seg%d', features{2}, layer, seg));
+                err_dim=size(error_data)
+                
+                %pre_error make
+                pre_Error = error_data * err_W;
+                
+                name = [num2str(subject), '_', sprintf('E%d_seg%d', layer, seg), '_W_svd0.9.mat']
+                save([error_folder_name,'/', name], 'pre_Error', '-v7.3');
+            end
+        end
+    end
+end
+
+        
+%% load fMRI Y
+clc;clear
+
+%load Y
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+load([saveroot, '/' , 'Y', '/', 'fMRI_10k_cortex.mat']);
+
+%% ratio map calculation - total movie
+clc; 
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+
+features = {'Ahat','E'};
+
+PT_layer_array={};
+ET_layer_array={};
+PE_layer_array={};
+
+
+P_seg_array={};
+E_seg_array={};
+PE_seg_array={};
+
+
+for i = 1:15
+    subject = subjectIDs(i) 
+    disp(['correalting' , num2str(subject)])
+    
+    % total Y
+    sub_cii1_4 = cat(2, sub_cii{i}{1}, sub_cii{i}{2}, sub_cii{i}{3}, sub_cii{i}{4});
+    dim = size(sub_cii1_4)
+    
+    for layer= 0:5
+        for seg = 1:4
+            % Initialize arrays to store results
+            num_voxels = dim(1);
+            
+            %load Yhat_prediction
+            prediction_folder_name = [saveroot,'/', 'ratio','/', '6layers', '/', 'Yhat', '/', 'Y_hat_P','/', sprintf('seg%d',seg),'/']
+            pre_Yhat = load([prediction_folder_name,'/', num2str(subject), '_', sprintf('Ahat%d_seg%d', layer, seg), '_W_svd0.9.mat'])
+            P_seg_array{seg}= pre_Yhat.pre_Yhat;
+            
+
+            %load Yhat_error
+            error_folder_name = [saveroot,'/', 'ratio','/', '6layers', '/', 'Yhat', '/','Y_hat_E','/', sprintf('seg%d',seg),'/']
+            pre_Error = load([error_folder_name,'/', num2str(subject), '_', sprintf('E%d_seg%d', layer, seg), '_W_svd0.9.mat'])
+            E_seg_array{seg}=pre_Error.pre_Error;
+           
+            
+            %load total prediction+error
+            total_folder_name = [saveroot,'/', 'ratio','/', '6layers', '/', 'Yhat', '/', 'Y_hat_P+E','/', sprintf('seg%d',seg),'/']
+            pre_total = load([total_folder_name,'/', num2str(subject), '_', sprintf('layer%d_seg%d', layer, seg), '_pred_svd0.90.mat'])
+            PE_seg_array{seg}=pre_total.Yhat;
+           
+        end
+        
+        %concatenat Yhat for movie1-4
+        pre_Yhat_total= cat(1, P_seg_array{:});
+        pre_Error_total= cat(1, E_seg_array{:});
+        pre_total_total= cat(1, PE_seg_array{:});
+        
+        
+        % linear regression calc begins
+        PT_array = zeros(1, num_voxels);
+        ET_array = zeros(1, num_voxels);
+        PE_array = zeros(1, num_voxels);
+        
+        for v = 1:num_voxels
+            
+            % Fit a linear regression model for the total prediction+error data for the current voxel
+            mdl_total = fitlm(pre_total_total(v), sub_cii1_4(v));
+            
+            % Fit a linear regression model for the prediction data for the current voxel
+            mdl_prediction = fitlm(pre_Yhat_total(v), sub_cii1_4(v));
+            
+            % Fit a linear regression model for the error data for the current voxel
+            mdl_error = fitlm(pre_Error_total(v), sub_cii1_4(v));
+            
+            if  mdl_prediction.Coefficients.Estimate(1) ~= 0 && mdl_error.Coefficients.Estimate(1) ~= 0
+                PE = mdl_prediction.Coefficients.Estimate(1) / mdl_error.Coefficients.Estimate(1);
+            elseif mdl_prediction.Coefficients.Estimate(2) ~= 0 && mdl_error.Coefficients.Estimate(2) ~= 0
+                PE = mdl_prediction.Coefficients.Estimate(2) / mdl_error.Coefficients.Estimate(2);
+            end
+            
+            if mdl_total.Coefficients.Estimate(1) ~= 0 && mdl_error.Coefficients.Estimate(1) ~= 0
+                ET = mdl_error.Coefficients.Estimate(1) / mdl_total.Coefficients.Estimate(1);
+            elseif mdl_total.Coefficients.Estimate(2) ~= 0 && mdl_error.Coefficients.Estimate(2) ~= 0
+                ET = mdl_error.Coefficients.Estimate(2) / mdl_total.Coefficients.Estimate(2);
+            end
+            
+            if mdl_total.Coefficients.Estimate(1) ~= 0 && mdl_prediction.Coefficients.Estimate(1) ~= 0
+                PT = mdl_prediction.Coefficients.Estimate(1) / mdl_total.Coefficients.Estimate(1);
+            elseif mdl_total.Coefficients.Estimate(2) ~= 0 && mdl_prediction.Coefficients.Estimate(2) ~= 0
+                PT = mdl_prediction.Coefficients.Estimate(2) / mdl_total.Coefficients.Estimate(2);
+            end
+            
+            % Store the calculated ratios in the arrays
+            PT_array(v) = PT;
+            ET_array(v) = ET;
+            PE_array(v) = PE;
+        end
+        % Concatenate ratio for each layer
+        PT_layer_array{layer+1} = PT_array;
+        ET_layer_array{layer+1} = ET_array;
+        PE_layer_array{layer+1} = PE_array;
+    end
+    
+    %save layer_array for each subject
+    PT_layer_array = cat(1, PT_layer_array{:});
+    PT_name = [num2str(subject), '_PT_ratio.mat']
+    save([saveroot,'/', 'ratio','/', '6layers', '/', 'ratio_map', '/', 'PT','/', PT_name], 'PT_layer_array', '-v7.3');
+    
+    ET_layer_array = cat(1, ET_layer_array{:});
+    ET_name = [num2str(subject), '_ET_ratio.mat']
+    save([saveroot,'/', 'ratio','/', '6layers', '/', 'ratio_map', '/', 'ET','/', ET_name], 'ET_layer_array', '-v7.3');
+    
+    PE_layer_array = cat(1, PE_layer_array{:});
+    PE_name = [num2str(subject), '_PE_ratio.mat']
+    save([saveroot,'/', 'ratio','/', '6layers', '/', 'ratio_map', '/', 'PE','/', PE_name], 'PE_layer_array', '-v7.3');
+    
+    %initialize
+    PT_layer_array={};
+    ET_layer_array={};
+    PE_layer_array={};
+end
+
+
+%% Step 6: avg .mat -total
+clc;clear
+
+%dir
+saveroot = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test';
+
+subjectIDs = [100610, 116726, 135124, 156334, 169343, 178243, 191841, 201515, 249947, 380036, 463040, 725751, 818859, 901139, 102311, 118225, 137128, 157336, 169444, 178647, 192439, 203418, 251833, 381038, 467351, 601127, 732243, 825048, 901442, 995174, 102816, 125525, 140117, 158035, 169747, 180533, 192641, 204521, 257845, 385046, 617748, 826353, 905147, 104416, 126426, 144226, 158136, 171633, 181232, 193845, 205220, 263436, 389357, 525541, 627549, 751550, 833249, 910241, 105923, 145834, 159239, 172130, 195041, 209228, 283543, 393247, 638049, 757764, 859671, 926862, 108323, 128935, 146129, 162935, 173334, 182436, 196144, 212419, 318637, 395756, 541943, 644246, 765864, 861456, 927359, 109123, 130114, 146432, 164131, 175237, 182739, 197348, 214019, 320826, 397760, 547046, 654552, 770352, 871762, 942658, 111312, 130518, 146735, 164636, 176542, 185442, 198653, 214524, 330324, 401422, 671855, 771354, 872764, 943862, 111514, 131722, 146937, 165436, 177140, 186949, 199655, 221319, 346137, 406836, 562345, 680957, 782561, 878776, 951457, 114823, 132118, 148133, 167036, 177645, 187345, 200210, 233326, 352738, 412528, 572045, 690152, 783462, 878877, 958976, 115017, 134627, 150423, 167440, 177746, 191033, 200311, 239136, 360030, 429040, 573249, 706040, 789373, 898176, 966975, 115825, 134829, 155938, 169040, 178142, 191336, 200614, 246133, 365343, 436845, 581450, 724446, 814649, 899885, 971160];
+
+
+types={'ET', 'PE', 'PT'};
+
+for t = 1:length(types)
+        type = types{t}
+        sum_values=0;
+    for i = 1:15
+        subject = subjectIDs(i)
+
+        % Load correlation
+        value = load([saveroot,'/',  'ratio','/', '6layers', '/', 'ratio_map', '/',  type, '/',  strcat(num2str(subject),'_', sprintf('%s_ratio.mat', type))]);
+        value=value.(sprintf('%s_layer_array', type));
+
+        sum_values = sum_values + value;
+    end
+    Y_hat = sum_values / 15;
+    
+    save([saveroot,'/',  'ratio','/', '6layers', '/', 'ratio_map', '/', type, '/', sprintf('avg_%s_ratio.mat', type)], 'Y_hat', '-v7.3');
+    clear Y_hat
+end
+
+%% ratio_dtseries - individual sub
+clc; clear
+addpath(genpath('/local_raid1/01_software/toolboxes/cifti-matlab/'));
+
+subjects = {'100610', '116726', '135124', '156334', '169343', '178243', '191841', '201515', '249947', '380036', '463040', '725751', '818859', '901139', '102311'};
+
+ciidir = '/combinelab/02_data/01_HCP/7T_MOVIE_2mm/100610/MNINonLinear/Results/tfMRI_MOVIE1_7T_AP/';
+ciidir = sprintf([ciidir, 'tfMRI_MOVIE1_7T_AP_Atlas_MSMAll.10k.dtseries.nii']);
+cii = ciftiopen(ciidir, 'wb_command');
+cii.diminfo{1, 1}.models(3:end) = [];
+cii.diminfo{1, 1}.length = 18722;
+cii.diminfo{1, 2}.length = 1;
+
+ratio_dir = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test/ratio/6layers/ratio_map/';
+saveroot='/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test/ratio/6layers/dt_result/';
+
+types={'ET', 'PE', 'PT'};
+ 
+layer_array={};
+
+
+for i = 1:length(subjects)
+    subject = subjects{i}
+    for t = 1:length(types)
+        
+        type = types{t}
+        disp(sprintf('%s_%s_ratio.mat', subject, type))
+        
+        ratio = load(sprintf('%s%s/%s_%s_ratio.mat', ratio_dir,type, subject, type));
+        ratio = ratio.(sprintf('%s_layer_array', type));
+        
+        ratio = ratio';
+        
+        cii.cdata = ratio;
+        
+        save_file_name = sprintf([saveroot, '%s_%s_ratio.dtseries.nii'], subject, type)
+        ciftisavereset(cii, save_file_name, 'wb_command');
+    end
+end
+
+%% ratio_dtseries - avg
+clc; clear
+addpath(genpath('/local_raid1/01_software/toolboxes/cifti-matlab/'));
+
+subjects = {'100610', '116726', '135124', '156334', '169343', '178243', '191841', '201515', '249947', '380036', '463040', '725751', '818859', '901139', '102311'};
+
+ciidir = '/combinelab/02_data/01_HCP/7T_MOVIE_2mm/100610/MNINonLinear/Results/tfMRI_MOVIE1_7T_AP/';
+ciidir = sprintf([ciidir, 'tfMRI_MOVIE1_7T_AP_Atlas_MSMAll.10k.dtseries.nii']);
+cii = ciftiopen(ciidir, 'wb_command');
+cii.diminfo{1, 1}.models(3:end) = [];
+cii.diminfo{1, 1}.length = 18722;
+cii.diminfo{1, 2}.length = 1;
+
+ratio_dir = '/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test/ratio/6layers/ratio_map/';
+saveroot='/combinelab/03_user/jungmin/01_project/01_Encoding/01_HWen_Encoding/PredNet/Titanic_trained/HCP_test/ratio/6layers/dt_result/';
+
+types={'ET', 'PE', 'PT'};
+ 
+layer_array={};
+
+
+for t = 1:length(types)
+    
+    type = types{t}
+    
+    ratio = load(sprintf('%s%s/avg_%s_ratio.mat', ratio_dir, type, type));
+    ratio = ratio.Y_hat;
+    
+    ratio = ratio';
+    
+    cii.cdata = ratio;
+    
+    save_file_name = sprintf('%s/avg_%s_ratio.dtseries.nii',saveroot, type)
+    ciftisavereset(cii, save_file_name, 'wb_command');
+end
+
